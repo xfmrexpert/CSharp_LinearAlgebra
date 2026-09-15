@@ -1,20 +1,93 @@
 #!/usr/bin/env bash
-# Dump JIT disassembly for the micro-kernels and check for accumulator spills.
+# Dump JIT disassembly for the micro-kernels and fail on accumulator spills.
+#
+# This exists because of a failure mode that is silent: RyuJIT's register
+# allocator is shape-sensitive, and a kernel that looks identical in source can
+# have every accumulator spilled to the stack, costing roughly 5x, with no
+# warning of any kind. The only reliable detector is to read the generated code.
+#
+# Two details matter and are easy to get wrong:
+#
+#   * Run the built binary directly, NOT via `dotnet run`. The SDK and the app
+#     are separate processes and both honour DOTNET_JitStdOutFile, so they
+#     clobber each other's output and kernels go missing from the dump.
+#
+#   * Scope the spill search to the kernels. The dump is filtered by method
+#     name, and plenty of unrelated framework methods are also called Execute.
+#
+# Spill slots are rbp-relative here, not rsp-relative; both are matched.
+
 set -euo pipefail
 
-METHOD="${1:-Execute}"
-OUT="${2:-kernel.asm}"
+CONFIGURATION="${CONFIGURATION:-Release}"
+OUT="${1:-kernel.asm}"
+BINARY="${BINARY:-./bin/${CONFIGURATION}/net10.0/GemmLab}"
 
-DOTNET_JitDisasm="$METHOD" \
+if [[ ! -x "$BINARY" ]]; then
+    echo "building $CONFIGURATION first ($BINARY not found)"
+    dotnet build -c "$CONFIGURATION" GemmLab.csproj >/dev/null
+fi
+
+DOTNET_JitDisasm="Execute" \
 DOTNET_JitStdOutFile="$OUT" \
 DOTNET_TieredCompilation=0 \
 DOTNET_ReadyToRun=0 \
-dotnet run -c Release > /dev/null
+"$BINARY" --verify-only >/dev/null
 
 echo "disassembly written to $OUT"
 echo
-echo "accumulator spills (want zero):"
-grep -cE "vmov(ups|apd|upd) +(zmm|ymm)word ptr \[(rbp|rsp)" "$OUT" || true
+
+# Split the dump into one file per method and inspect only the kernels.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+awk -v dir="$WORK" '
+    /^; Assembly listing for method/ {
+        name = $0
+        sub(/^; Assembly listing for method /, "", name)
+        sub(/\(.*$/, "", name)
+        gsub(/[^A-Za-z0-9_.:]/, "", name)
+        file = dir "/" name ".txt"
+        next
+    }
+    file { print > file }
+' "$OUT"
+
+SPILL_PATTERN='vmov(ups|apd|upd) +(zmm|ymm)word ptr \[(rbp|rsp)'
+FOUND=0
+FAILED=0
+
+printf '%-34s %8s %8s\n' "kernel" "FMAs" "spills"
+
+for listing in "$WORK"/GemmLab.*Kernel*Execute.txt; do
+    [[ -e "$listing" ]] || continue
+
+    FOUND=$((FOUND + 1))
+    name="$(basename "$listing" .txt)"
+
+    fmas=$(grep -c "vfmadd" "$listing" || true)
+    spills=$(grep -cE "$SPILL_PATTERN" "$listing" || true)
+
+    printf '%-34s %8s %8s\n' "$name" "$fmas" "$spills"
+
+    if [[ "$spills" -ne 0 ]]; then
+        echo
+        echo "FAIL: $name spills accumulators to the stack. Offending instructions:"
+        grep -nE "$SPILL_PATTERN" "$listing" | head -20
+        FAILED=1
+    fi
+done
+
 echo
-echo "FMA count per listing:"
-grep -c "vfmadd" "$OUT" || true
+
+if [[ "$FOUND" -eq 0 ]]; then
+    echo "FAIL: no micro-kernel disassembly was captured."
+    echo "Nothing was verified. Check that $BINARY runs and that the JIT dump is reaching $OUT."
+    exit 1
+fi
+
+if [[ "$FAILED" -ne 0 ]]; then
+    exit 1
+fi
+
+echo "OK: $FOUND micro-kernel(s) inspected, no accumulator spills."

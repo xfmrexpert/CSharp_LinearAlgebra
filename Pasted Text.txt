@@ -1,4 +1,0 @@
-craymond@pop-os:~/Documents/trap$ lscpu | grep -E "Model name|L2|L3"
-Model name:                              12th Gen Intel(R) Core(TM) i7-12700H
-L2 cache:                                11.5 MiB (8 instances)
-L3 cache:                                24 MiB (1 instance)

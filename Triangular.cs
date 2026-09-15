@@ -115,6 +115,49 @@ internal static unsafe class Triangular
         }
     }
 
+    /// <summary>
+    /// Solve U^T * X = B in place, U being m x m upper triangular with an
+    /// explicit diagonal.
+    ///
+    /// U^T is lower triangular, so this is forward substitution. Unlike the
+    /// untransposed solves this is written as inner products rather than axpys:
+    /// the elements needed for row i of U^T are column i of U, which is
+    /// contiguous in column-major storage, whereas an axpy formulation would
+    /// walk a row of U with stride ldu.
+    /// </summary>
+    public static void SolveUpperTransposed(int m, int n, double* u, int ldu, double* b, int ldb)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            double* column = b + (nint)j * ldb;
+
+            for (int i = 0; i < m; i++)
+            {
+                double* ui = u + (nint)i * ldu;
+                column[i] = (column[i] - Blas1.Dot(i, ui, column)) / ui[i];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Solve L^T * X = B in place, L being m x m unit lower triangular with an
+    /// implicit diagonal. L^T is unit upper triangular, so this is backward
+    /// substitution, again by inner products down columns of L.
+    /// </summary>
+    public static void SolveLowerUnitTransposed(int m, int n, double* l, int ldl, double* b, int ldb)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            double* column = b + (nint)j * ldb;
+
+            for (int i = m - 1; i >= 0; i--)
+            {
+                double* li = l + (nint)i * ldl;
+                column[i] -= Blas1.Dot(m - i - 1, li + i + 1, column + i + 1);
+            }
+        }
+    }
+
     private static void SolveLowerUnit1(int m, double* l, int ldl, double* column)
     {
         for (int p = 0; p < m - 1; p++)

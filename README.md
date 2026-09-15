@@ -19,15 +19,27 @@ where the JIT's code generation decides whether the whole idea is viable.
 | `Reference.cs` | Naive GEMM oracle + relative Frobenius residual |
 | `Blis.cs` | Optional native `bli_dgemm` binding, ABI/dispatch queries, single-thread setup |
 | `TimingStatistics.cs` | Shared median and interpolated quartiles for timing samples |
+| `ParallelGemm.cs` | Multi-threaded driver, parallel over the jr micro-panel loop |
+| `GemmDispatch.cs` | Owns both scratches; picks serial or threaded by work size |
+| `Blas1.cs`, `Blas2.cs` | Vectorised level-1 and narrow-panel level-2 primitives |
+| `Triangular.cs` | Triangular solves, including the transposed pair |
+| `Lu.cs` | Blocked right-looking LU with partial pivoting, solve, transpose solve |
+| `LinearOperators.cs` | `ILinearOperator` plus dense/matrix-power and LU-inverse operators |
+| `NormEstimate.cs` | Higham and Tisseur `normest1`; `dgecon`-equivalent `rcond` |
 | `Program.cs` | Shared correctness checks and benchmarks, managed/BLIS comparison |
+| `tests/GemmLab.Tests/` | xunit suite |
+| `disasm.sh` | Per-kernel disassembly and accumulator-spill check |
 
-Column-major throughout, unit row stride, single-threaded. No NuGet packages —
-`dotnet run -c Release` works offline with the .NET 10 SDK installed. The managed
-kernels have no native dependencies; the BLIS comparison requires a BLIS shared
-library and is skipped with a diagnostic if it cannot be loaded.
+Column-major throughout, unit row stride, double precision. The library takes no
+NuGet packages; only the test project does. The managed kernels have no native
+dependencies; the BLIS comparison requires a BLIS shared library and is skipped
+with a diagnostic if it cannot be loaded.
 
 ```
-dotnet run -c Release
+dotnet run -c Release                 # verify, then benchmark everything
+dotnet run -c Release -- --verify-only # verify only; exits non-zero on failure
+dotnet test -c Release                 # the unit suite
+./disasm.sh                            # dump kernel codegen, fail on spills
 ```
 
 The project targets `net10.0` and requires the .NET 10 SDK. The verification
@@ -231,27 +243,33 @@ benchmarking by hand, cross-check with `DOTNET_TieredCompilation=0`.
 ## Reading the disassembly yourself
 
 ```bash
-DOTNET_JitDisasm="Execute" \
-DOTNET_JitStdOutFile=kernel.asm \
-DOTNET_TieredCompilation=0 \
-dotnet run -c Release
-
-# Any hit here means the accumulators did not stay in registers:
-grep -E "vmov(ups|apd|upd) +(zmm|ymm)word ptr \[(rbp|rsp)" kernel.asm
+./disasm.sh kernel.asm
 ```
 
+It dumps the kernels, reports FMA and spill counts per kernel, and exits
+non-zero if any accumulator reached the stack. CI runs the same script.
+
+Two traps it exists to avoid. First, do not dump through `dotnet run`: the SDK
+driver and the application are separate processes and both honour
+`DOTNET_JitStdOutFile`, so they overwrite each other's output and kernels go
+missing from the dump without any error. Run the built binary directly. Second,
+scope the grep to the kernel listings — plenty of framework methods are also
+called `Execute`, and a spill in one of those is not your problem.
+
 What you want to see in the loop body: MR/8 * NR `vfmadd231pd`, NR
-`vbroadcastsd`, MR/8 `vmovups` loads, and nothing else but the loop counter.
+`vbroadcastsd`, MR/8 `vmovups` loads, and nothing else but the loop counter. On
+.NET 10.0.112 the totals including the write-back are 32 `vfmadd` for the
+AVX-512 16x8 kernel and 24 for the AVX2 8x6, with zero spills.
 
 ## What this does not answer
 
 - **No OpenBLAS comparison.** BLIS is now an optional baseline in the harness;
   the historical .NET 8 results above predate that integration.
-- **Single-threaded.** Parallelising loops 3 and 5 is the next step; scaling
-  behaviour is a separate question from single-core efficiency.
-- **Block sizes are untuned.** `GemmScratch.For<T>` uses MC=288, KC=384,
-  NC=4096 as placeholders. Sweep them, or derive them from cache geometry per
-  the BLIS analytical model (Low et al., TOMS 2016).
+- **Block sizes are untuned.** `GemmScratch.For<T>` still uses MC=288, KC=384,
+  NC=4096 as placeholders; `ParallelGemmScratch` uses cache-derived KC=256,
+  MC=144, which measured better below n=2048 and has not been ported to the
+  serial path. Sweep them, or derive them per the BLIS analytical model (Low et
+  al., TOMS 2016).
 - **Double only, no transposes, no complex.** Deliberately.
 - **One machine, virtualised, one core.** Re-run on your own hardware before
   drawing conclusions.
@@ -260,8 +278,7 @@ What you want to see in the loop body: MR/8 * NR `vfmadd231pd`, NR
 
 1. Re-run on your hardware; confirm the no-spill result there.
 2. Compare the managed kernels with BLIS on the same machine and record its build/version.
-3. Sweep MC/KC/NC.
+3. Sweep MC/KC/NC, and port the cache-derived values to the serial path.
 4. Try MR=24 NR=8 (24 accumulators, better FMA-to-load ratio, 28 of 32 zmm
    live) and see where RyuJIT's allocator gives out.
-5. Parallelise loop 3 and loop 5.
-6. Only then decide managed vs native.
+5. Only then decide managed vs native.

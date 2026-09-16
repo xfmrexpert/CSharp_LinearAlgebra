@@ -1,4 +1,4 @@
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Products of a square matrix with a narrow panel of columns.

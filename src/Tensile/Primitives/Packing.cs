@@ -1,4 +1,4 @@
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Panel packing. This is the half of BLIS that nothing about the language

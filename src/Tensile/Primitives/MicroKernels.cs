@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// A BLIS-style micro-kernel. Computes, for a single MR x NR tile of C:
@@ -30,6 +30,15 @@ public interface IMicroKernel
     /// <summary>Short name used in reports.</summary>
     static abstract string Name { get; }
 
+    /// <summary>
+    /// Accumulate one MR x NR tile: C += alpha * Ap * Bp.
+    /// </summary>
+    /// <param name="kc">Depth of the packed panels.</param>
+    /// <param name="alpha">Scalar applied to the product on write-back.</param>
+    /// <param name="ap">Packed A micro-panel: MR contiguous doubles per k.</param>
+    /// <param name="bp">Packed B micro-panel: NR contiguous doubles per k.</param>
+    /// <param name="c">Top-left corner of the C tile, column-major.</param>
+    /// <param name="ldc">Column stride of C.</param>
     static abstract unsafe void Execute(
         int kc, double alpha, double* ap, double* bp, double* c, int ldc);
 }
@@ -47,11 +56,16 @@ public interface IMicroKernel
 /// </summary>
 public readonly struct Avx512Kernel16x8 : IMicroKernel
 {
+    /// <inheritdoc/>
     public static int Mr => 16;
+    /// <inheritdoc/>
     public static int Nr => 8;
+    /// <inheritdoc/>
     public static bool IsSupported => Avx512F.IsSupported;
+    /// <inheritdoc/>
     public static string Name => "AVX-512 16x8";
 
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static unsafe void Execute(
         int kc, double alpha, double* ap, double* bp, double* c, int ldc)
@@ -134,11 +148,16 @@ public readonly struct Avx512Kernel16x8 : IMicroKernel
 /// </summary>
 public readonly struct Avx2Kernel8x6 : IMicroKernel
 {
+    /// <inheritdoc/>
     public static int Mr => 8;
+    /// <inheritdoc/>
     public static int Nr => 6;
+    /// <inheritdoc/>
     public static bool IsSupported => Fma.IsSupported && Avx.IsSupported;
+    /// <inheritdoc/>
     public static string Name => "AVX2/FMA 8x6";
 
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static unsafe void Execute(
         int kc, double alpha, double* ap, double* bp, double* c, int ldc)
@@ -209,11 +228,16 @@ public readonly struct Avx2Kernel8x6 : IMicroKernel
 /// </summary>
 public readonly struct ScalarKernel4x4 : IMicroKernel
 {
+    /// <inheritdoc/>
     public static int Mr => 4;
+    /// <inheritdoc/>
     public static int Nr => 4;
+    /// <inheritdoc/>
     public static bool IsSupported => true;
+    /// <inheritdoc/>
     public static string Name => "scalar 4x4";
 
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static unsafe void Execute(
         int kc, double alpha, double* ap, double* bp, double* c, int ldc)

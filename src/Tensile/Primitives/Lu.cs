@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Result of <see cref="Lu.Factor{TKernel}"/>. The factors overwrite the
@@ -10,8 +10,13 @@ namespace GemmLab;
 /// </summary>
 public sealed unsafe class LuFactorization : IDisposable
 {
+    /// <summary>Rows of the factored matrix.</summary>
     public int Rows { get; }
+
+    /// <summary>Columns of the factored matrix.</summary>
     public int Columns { get; }
+
+    /// <summary>Column stride of the caller's buffer.</summary>
     public int Stride { get; }
 
     /// <summary>The caller's buffer, factored in place. Not owned.</summary>
@@ -44,7 +49,10 @@ public sealed unsafe class LuFactorization : IDisposable
     /// </summary>
     public double PivotRatio => LargestPivot == 0.0 ? 0.0 : SmallestPivot / LargestPivot;
 
+    /// <summary>Whether an exactly zero pivot was encountered. A solve would divide by zero.</summary>
     public bool IsSingular => SingularColumn >= 0;
+
+    /// <summary>Whether the factored matrix was square, and so admits a solve.</summary>
     public bool IsSquare => Rows == Columns;
 
     internal LuFactorization(int rows, int columns, int stride, double* factors)
@@ -59,12 +67,14 @@ public sealed unsafe class LuFactorization : IDisposable
         new Span<int>(Pivots, count).Clear();
     }
 
+    /// <summary>Release the pivot array. The factors belong to the caller and are untouched.</summary>
     public void Dispose()
     {
         if (Pivots is not null) { NativeMemory.AlignedFree(Pivots); Pivots = null; }
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>Releases the pivot array if <see cref="Dispose"/> was not called.</summary>
     ~LuFactorization() => Dispose();
 }
 
@@ -88,6 +98,10 @@ public static unsafe class Lu
     /// <summary>Smallest normalized double; below this, divide rather than multiply by a reciprocal.</summary>
     private const double SafeMin = 2.2250738585072014e-308;
 
+    /// <summary>
+    /// Default panel width. The optimum shifts with n, so this is a compromise
+    /// rather than a tuned value; pass an explicit width when it matters.
+    /// </summary>
     public const int DefaultBlockSize = 64;
 
     /// <summary>

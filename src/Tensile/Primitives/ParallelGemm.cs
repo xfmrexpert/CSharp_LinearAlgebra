@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Buffers and blocking parameters for <see cref="ParallelGemm"/>.
@@ -15,12 +15,22 @@ namespace GemmLab;
 /// </summary>
 public sealed unsafe class ParallelGemmScratch : IDisposable
 {
+    /// <summary>Row-block size: the packed A block per MC step is sized to fit a core's share of L2.</summary>
     public int Mc { get; set; }
+
+    /// <summary>Depth of a k-slab, sized against the smallest L1 in the machine.</summary>
     public int Kc { get; set; }
+
+    /// <summary>Column-block size: the packed B block is sized to sit in L3.</summary>
     public int Nc { get; set; }
+
+    /// <summary>Upper bound on worker threads. The actual count is scaled down for small problems.</summary>
     public int MaxThreads { get; set; }
 
+    /// <summary>Packed A slab for the whole m x Kc extent, 64-byte aligned.</summary>
     public double* Ap { get; private set; }
+
+    /// <summary>Packed B block, Kc x Nc, 64-byte aligned.</summary>
     public double* Bp { get; private set; }
 
     private nuint _aCapacity;
@@ -91,6 +101,7 @@ public sealed unsafe class ParallelGemmScratch : IDisposable
     private static double* Alloc(nuint count) =>
         (double*)NativeMemory.AlignedAlloc(count * sizeof(double), 64);
 
+    /// <summary>Release the packing buffers. Safe to call more than once.</summary>
     public void Dispose()
     {
         if (Ap is not null) { NativeMemory.AlignedFree(Ap); Ap = null; }
@@ -100,6 +111,7 @@ public sealed unsafe class ParallelGemmScratch : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>Releases the native buffers if <see cref="Dispose"/> was not called.</summary>
     ~ParallelGemmScratch() => Dispose();
 }
 

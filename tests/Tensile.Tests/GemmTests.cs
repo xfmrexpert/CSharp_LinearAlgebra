@@ -1,4 +1,6 @@
-namespace GemmLab.Tests;
+using Tensile.Primitives;
+
+namespace Tensile.Tests;
 
 /// <summary>
 /// The GEMM contract, run against every micro-kernel the host supports.
@@ -81,9 +83,9 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     {
         const int m = 33, n = 21, k = 12;
 
-        using var a = Matrix.Random(m, k, seed: 1);
-        using var b = Matrix.Random(k, n, seed: 2);
-        using var c = new Matrix(m, n);
+        using var a = TestMatrix.Random(m, k, seed: 1);
+        using var b = TestMatrix.Random(k, n, seed: 2);
+        using var c = new TestMatrix(m, n);
 
         c.FillAll(double.NaN);
 
@@ -104,9 +106,9 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     {
         const int m = 29, n = 23, k = 31, padding = 5;
 
-        using var a = Matrix.Random(m, k, seed: 3, stride: m + padding);
-        using var b = Matrix.Random(k, n, seed: 4, stride: k + padding);
-        using var c = new Matrix(m, n, stride: m + padding);
+        using var a = TestMatrix.Random(m, k, seed: 3, stride: m + padding);
+        using var b = TestMatrix.Random(k, n, seed: 4, stride: k + padding);
+        using var c = new TestMatrix(m, n, stride: m + padding);
 
         const double Sentinel = -12345.5;
         c.FillAll(Sentinel);
@@ -132,10 +134,10 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     {
         foreach ((int m, int n, int k) in new[] { (16, 16, 16), (192, 193, 194) })
         {
-            using var a = Matrix.Random(m, k, seed: 5);
-            using var b = Matrix.Random(k, n, seed: 6);
-            using var viaDispatch = new Matrix(m, n);
-            using var viaSerial = new Matrix(m, n);
+            using var a = TestMatrix.Random(m, k, seed: 5);
+            using var b = TestMatrix.Random(k, n, seed: 6);
+            using var viaDispatch = new TestMatrix(m, n);
+            using var viaSerial = new TestMatrix(m, n);
 
             using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
@@ -158,9 +160,9 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     [InlineData(4, 4, 0)]
     public void DegenerateShapesAreHandled(int m, int n, int k)
     {
-        using var a = Matrix.Random(Math.Max(m, 1), Math.Max(k, 1), seed: 7);
-        using var b = Matrix.Random(Math.Max(k, 1), Math.Max(n, 1), seed: 8);
-        using var c = new Matrix(Math.Max(m, 1), Math.Max(n, 1));
+        using var a = TestMatrix.Random(Math.Max(m, 1), Math.Max(k, 1), seed: 7);
+        using var b = TestMatrix.Random(Math.Max(k, 1), Math.Max(n, 1), seed: 8);
+        using var c = new TestMatrix(Math.Max(m, 1), Math.Max(n, 1));
 
         using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
@@ -176,9 +178,9 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     private static void CheckAgainstReference(
         int m, int n, int k, double alpha, double beta, int padding, Path path)
     {
-        using var a = Matrix.Random(m, k, seed: 11, stride: m + padding);
-        using var b = Matrix.Random(k, n, seed: 12, stride: k + padding);
-        using var c = Matrix.Random(m, n, seed: 13, stride: m + padding);
+        using var a = TestMatrix.Random(m, k, seed: 11, stride: m + padding);
+        using var b = TestMatrix.Random(k, n, seed: 12, stride: k + padding);
+        using var c = TestMatrix.Random(m, n, seed: 13, stride: m + padding);
         using var expected = c.Clone();
 
         Reference.Multiply(m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,

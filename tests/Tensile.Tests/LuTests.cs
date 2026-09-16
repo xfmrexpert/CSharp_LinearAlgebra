@@ -1,4 +1,6 @@
-namespace GemmLab.Tests;
+using Tensile.Primitives;
+
+namespace Tensile.Tests;
 
 /// <summary>
 /// LU, checked by residual.
@@ -44,7 +46,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     [MemberData(nameof(Cases))]
     public void FactorizationResidualIsSmall(int rows, int columns, int blockSize, int padding)
     {
-        using var original = Matrix.Random(rows, columns, seed: 42, stride: rows + padding);
+        using var original = TestMatrix.Random(rows, columns, seed: 42, stride: rows + padding);
         using var factors = original.Clone();
         using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
@@ -63,9 +65,9 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     [InlineData(200, 64)]
     public void SolveHasSmallBackwardError(int n, int blockSize)
     {
-        using var original = Matrix.RandomDiagonallyDominant(n, seed: 7, stride: n + 2);
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 7, stride: n + 2);
         using var factors = original.Clone();
-        using var b = Matrix.Random(n, 3, seed: 8, stride: n + 1);
+        using var b = TestMatrix.Random(n, 3, seed: 8, stride: n + 1);
         using var x = b.Clone();
         using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
@@ -85,9 +87,9 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     [InlineData(200, 64)]
     public void SolveTransposedHasSmallBackwardError(int n, int blockSize)
     {
-        using var original = Matrix.RandomDiagonallyDominant(n, seed: 9, stride: n + 2);
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 9, stride: n + 2);
         using var factors = original.Clone();
-        using var b = Matrix.Random(n, 3, seed: 10, stride: n + 1);
+        using var b = TestMatrix.Random(n, 3, seed: 10, stride: n + 1);
         using var x = b.Clone();
         using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
@@ -115,7 +117,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     {
         const int n = 48;
 
-        using var original = Matrix.Random(n, n, seed: 11);
+        using var original = TestMatrix.Random(n, n, seed: 11);
         using var gemm = GemmDispatch.Serial<TKernel>();
 
         using var blockedFactors = original.Clone();
@@ -145,7 +147,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     {
         const int n = 16;
 
-        using var a = Matrix.RandomDiagonallyDominant(n, seed: 12);
+        using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 12);
         for (int i = 0; i < n; i++) a[i, 5] = 0.0;
 
         using var gemm = GemmDispatch.Serial<TKernel>();
@@ -154,7 +156,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         Assert.True(lu.IsSingular);
         Assert.Equal(5, lu.SingularColumn);
 
-        using var b = Matrix.Random(n, 1, seed: 13);
+        using var b = TestMatrix.Random(n, 1, seed: 13);
         Assert.Throws<InvalidOperationException>(() => Lu.Solve(lu, 1, b.Data, b.Stride));
         Assert.Throws<InvalidOperationException>(() => Lu.SolveTransposed(lu, 1, b.Data, b.Stride));
     }
@@ -170,7 +172,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     {
         const int n = 24;
 
-        using var a = Matrix.RandomDiagonallyDominant(n, seed: 14);
+        using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 14);
         for (int i = 0; i < n; i++) a[i, 9] = a[i, 3];
 
         using var gemm = GemmDispatch.Serial<TKernel>();
@@ -183,25 +185,25 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     [Fact]
     public void NonSquareSolveIsRejected()
     {
-        using var a = Matrix.Random(12, 8, seed: 15);
+        using var a = TestMatrix.Random(12, 8, seed: 15);
         using var gemm = GemmDispatch.Serial<TKernel>();
         using var lu = Lu.Factor<TKernel>(12, 8, a.Data, a.Stride, gemm, 4);
 
-        using var b = Matrix.Random(12, 1, seed: 16);
+        using var b = TestMatrix.Random(12, 1, seed: 16);
 
         Assert.Throws<ArgumentException>(() => Lu.Solve(lu, 1, b.Data, b.Stride));
         Assert.Throws<ArgumentException>(() => Lu.SolveTransposed(lu, 1, b.Data, b.Stride));
     }
 
     /// <summary>||PA - LU||_F / ||A||_F, rebuilding PA from the packed factors.</summary>
-    private static double FactorizationResidual(LuFactorization lu, Matrix original)
+    private static double FactorizationResidual(LuFactorization lu, TestMatrix original)
     {
         int m = lu.Rows;
         int n = lu.Columns;
         int k = Math.Min(m, n);
 
         // Reconstruct L*U into a dense product, then undo the permutation.
-        using var product = new Matrix(m, n);
+        using var product = new TestMatrix(m, n);
 
         for (int j = 0; j < n; j++)
         {
@@ -240,7 +242,7 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     }
 
     /// <summary>||A x - b||_inf / (||A||_inf ||x||_inf), or the transposed form.</summary>
-    private static double ResidualOfSolve(Matrix a, Matrix x, Matrix b, bool transposed)
+    private static double ResidualOfSolve(TestMatrix a, TestMatrix x, TestMatrix b, bool transposed)
     {
         int n = a.Rows;
         double worst = 0.0;

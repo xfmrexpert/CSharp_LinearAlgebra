@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 
-namespace GemmLab.Tests;
+using Tensile.Primitives;
+
+namespace Tensile.Tests;
 
 /// <summary>
 /// An aligned column-major test matrix.
@@ -10,7 +12,7 @@ namespace GemmLab.Tests;
 /// to give a matrix a column stride larger than its row count, which is where
 /// stride bugs surface.
 /// </summary>
-internal sealed unsafe class Matrix : IDisposable
+internal sealed unsafe class TestMatrix : IDisposable
 {
     public int Rows { get; }
     public int Columns { get; }
@@ -18,7 +20,7 @@ internal sealed unsafe class Matrix : IDisposable
 
     public double* Data { get; private set; }
 
-    public Matrix(int rows, int columns, int stride = 0)
+    public TestMatrix(int rows, int columns, int stride = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(rows);
         ArgumentOutOfRangeException.ThrowIfNegative(columns);
@@ -43,9 +45,9 @@ internal sealed unsafe class Matrix : IDisposable
     }
 
     /// <summary>Uniform random entries in [-0.5, 0.5], padding left at zero.</summary>
-    public static Matrix Random(int rows, int columns, int seed, int stride = 0)
+    public static TestMatrix Random(int rows, int columns, int seed, int stride = 0)
     {
-        var matrix = new Matrix(rows, columns, stride);
+        var matrix = new TestMatrix(rows, columns, stride);
         var rng = new Random(seed);
 
         for (int j = 0; j < columns; j++)
@@ -59,7 +61,7 @@ internal sealed unsafe class Matrix : IDisposable
     /// Random entries with a diagonal large enough that the matrix is well
     /// conditioned and needs no pivoting to stay accurate.
     /// </summary>
-    public static Matrix RandomDiagonallyDominant(int n, int seed, int stride = 0)
+    public static TestMatrix RandomDiagonallyDominant(int n, int seed, int stride = 0)
     {
         var matrix = Random(n, n, seed, stride);
         for (int i = 0; i < n; i++) matrix[i, i] += n;
@@ -69,15 +71,15 @@ internal sealed unsafe class Matrix : IDisposable
     /// <summary>Fill every slot including padding, so overwrites of padding are visible.</summary>
     public void FillAll(double value) => new Span<double>(Data, Count).Fill(value);
 
-    public Matrix Clone()
+    public TestMatrix Clone()
     {
-        var copy = new Matrix(Rows, Columns, Stride);
+        var copy = new TestMatrix(Rows, Columns, Stride);
         new Span<double>(Data, Count).CopyTo(new Span<double>(copy.Data, Count));
         return copy;
     }
 
     /// <summary>Largest absolute difference over the logical (non-padding) entries.</summary>
-    public double MaxDifference(Matrix other)
+    public double MaxDifference(TestMatrix other)
     {
         double worst = 0.0;
 
@@ -94,5 +96,5 @@ internal sealed unsafe class Matrix : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    ~Matrix() => Dispose();
+    ~TestMatrix() => Dispose();
 }

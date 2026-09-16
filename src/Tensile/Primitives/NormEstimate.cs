@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>Outcome of a 1-norm estimate.</summary>
 /// <param name="Value">The estimate, always a lower bound on the true 1-norm.</param>

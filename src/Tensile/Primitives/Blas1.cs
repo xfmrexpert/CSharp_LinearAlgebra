@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Level-1 primitives. These exist because the LU panel factorization is

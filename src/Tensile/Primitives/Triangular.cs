@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Triangular solves, column-oriented so the right-hand side is walked

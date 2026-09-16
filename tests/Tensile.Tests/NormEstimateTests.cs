@@ -1,4 +1,6 @@
-namespace GemmLab.Tests;
+using Tensile.Primitives;
+
+namespace Tensile.Tests;
 
 /// <summary>
 /// The 1-norm estimator.
@@ -29,7 +31,7 @@ public unsafe class NormEstimateTests
     {
         for (int trial = 0; trial < 5; trial++)
         {
-            using var a = Matrix.Random(n, n, seed: n * 10 + trial, stride: n + 2);
+            using var a = TestMatrix.Random(n, n, seed: n * 10 + trial, stride: n + 2);
 
             double truth = Norms.One(n, n, a.Data, a.Stride);
             double estimate = NormEstimate.OfMatrix(n, a.Data, a.Stride, power: 1, columns: n).Value;
@@ -63,7 +65,7 @@ public unsafe class NormEstimateTests
     {
         for (int trial = 0; trial < 10; trial++)
         {
-            using var a = Matrix.Random(n, n, seed: n * 30 + trial);
+            using var a = TestMatrix.Random(n, n, seed: n * 30 + trial);
 
             double truth = Norms.One(n, n, a.Data, a.Stride);
 
@@ -83,7 +85,7 @@ public unsafe class NormEstimateTests
     {
         const int n = 64;
 
-        using var a = Matrix.Random(n, n, seed: 99);
+        using var a = TestMatrix.Random(n, n, seed: 99);
 
         var first = NormEstimate.OfMatrix(n, a.Data, a.Stride);
         var second = NormEstimate.OfMatrix(n, a.Data, a.Stride);
@@ -97,7 +99,7 @@ public unsafe class NormEstimateTests
     {
         const int n = 48;
 
-        using var a = Matrix.Random(n, n, seed: 101);
+        using var a = TestMatrix.Random(n, n, seed: 101);
         double truth = Norms.One(n, n, a.Data, a.Stride);
 
         for (int seed = 0; seed < 25; seed++)
@@ -127,7 +129,7 @@ public unsafe class NormEstimateTests
     {
         using var a = NonNegative(n, seed: n * 7 + power, scale: 1.0 / n);
         using var accumulated = a.Clone();
-        using var work = new Matrix(n, n);
+        using var work = new TestMatrix(n, n);
 
         for (int step = 1; step < power; step++)
         {
@@ -167,7 +169,7 @@ public unsafe class NormEstimateTests
     [MemberData(nameof(Orders))]
     public void OneNormMatchesNaiveColumnSums(int n)
     {
-        using var a = Matrix.Random(n, n, seed: n + 555, stride: n + 4);
+        using var a = TestMatrix.Random(n, n, seed: n + 555, stride: n + 4);
 
         double expected = 0.0;
 
@@ -185,7 +187,7 @@ public unsafe class NormEstimateTests
     [MemberData(nameof(Orders))]
     public void InfinityNormMatchesNaiveRowSums(int n)
     {
-        using var a = Matrix.Random(n, n, seed: n + 666, stride: n + 4);
+        using var a = TestMatrix.Random(n, n, seed: n + 666, stride: n + 4);
 
         double expected = 0.0;
 
@@ -199,9 +201,9 @@ public unsafe class NormEstimateTests
         Assert.Equal(expected, Norms.Infinity(n, n, a.Data, a.Stride), 12);
     }
 
-    private static Matrix NonNegative(int n, int seed, double scale = 1.0)
+    private static TestMatrix NonNegative(int n, int seed, double scale = 1.0)
     {
-        var matrix = new Matrix(n, n, stride: n + 2);
+        var matrix = new TestMatrix(n, n, stride: n + 2);
         var rng = new Random(seed);
 
         for (int j = 0; j < n; j++)
@@ -226,7 +228,7 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
     {
         const int n = 40;
 
-        using var a = new Matrix(n, n);
+        using var a = new TestMatrix(n, n);
         for (int i = 0; i < n; i++) a[i, i] = 1.0;
 
         double norm = Norms.One(n, n, a.Data, a.Stride);
@@ -252,7 +254,7 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
     [InlineData(48)]
     public void TracksTheExactReciprocalCondition(int n)
     {
-        using var original = Matrix.RandomDiagonallyDominant(n, seed: n * 3);
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: n * 3);
         using var factors = original.Clone();
 
         using var gemm = GemmDispatch.Serial<TKernel>();
@@ -261,7 +263,7 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
         double normOfA = Norms.One(n, n, original.Data, original.Stride);
 
         // A^-1 by solving against the identity.
-        using var inverse = new Matrix(n, n);
+        using var inverse = new TestMatrix(n, n);
         for (int i = 0; i < n; i++) inverse[i, i] = 1.0;
         Lu.Solve(lu, n, inverse.Data, inverse.Stride);
 
@@ -286,7 +288,7 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
 
         foreach (int n in new[] { 4, 6, 8, 10, 12 })
         {
-            using var a = new Matrix(n, n);
+            using var a = new TestMatrix(n, n);
             for (int j = 0; j < n; j++)
                 for (int i = 0; i < n; i++)
                     a[i, j] = 1.0 / (i + j + 1);
@@ -310,7 +312,7 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
     {
         const int n = 12;
 
-        using var a = Matrix.RandomDiagonallyDominant(n, seed: 77);
+        using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 77);
         for (int i = 0; i < n; i++) a[i, 4] = 0.0;
 
         double norm = Norms.One(n, n, a.Data, a.Stride);

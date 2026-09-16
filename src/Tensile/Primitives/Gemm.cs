@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Reusable packing buffers. These are large (the B buffer is sized to occupy
@@ -10,11 +10,22 @@ namespace GemmLab;
 /// </summary>
 public sealed unsafe class GemmScratch : IDisposable
 {
+    /// <summary>Row-block size: the packed A block is Mc x Kc and is sized to fit L2.</summary>
     public int Mc { get; }
+
+    /// <summary>Depth of a k-slab, sized so one A and one B micro-panel stay in L1.</summary>
     public int Kc { get; }
+
+    /// <summary>Column-block size: the packed B block is Kc x Nc and is sized to fit L3.</summary>
     public int Nc { get; }
+
+    /// <summary>Packed A block, Mc x Kc, 64-byte aligned.</summary>
     public double* Ap { get; private set; }
+
+    /// <summary>Packed B block, Kc x Nc, 64-byte aligned.</summary>
     public double* Bp { get; private set; }
+
+    /// <summary>Scratch MR x NR tile used to accumulate ragged edges of C.</summary>
     public double* Tile { get; private set; }
 
     private GemmScratch(int mr, int nr, int mc, int kc, int nc)
@@ -55,6 +66,7 @@ public sealed unsafe class GemmScratch : IDisposable
     private static double* Alloc(nuint count) =>
         (double*)NativeMemory.AlignedAlloc(count * sizeof(double), 64);
 
+    /// <summary>Release the packing buffers. Safe to call more than once.</summary>
     public void Dispose()
     {
         if (Ap is not null) { NativeMemory.AlignedFree(Ap); Ap = null; }
@@ -63,6 +75,7 @@ public sealed unsafe class GemmScratch : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>Releases the native buffers if <see cref="Dispose"/> was not called.</summary>
     ~GemmScratch() => Dispose();
 }
 

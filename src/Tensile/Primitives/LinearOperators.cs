@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Something the 1-norm estimator can probe. Both directions are required: the
@@ -44,6 +44,9 @@ public sealed unsafe class DenseMatrixOperator : ILinearOperator, IDisposable
     private double* _work;
     private int _workColumns;
 
+    /// <param name="n">Order of the square matrix.</param>
+    /// <param name="a">Column-major matrix. Not owned, and must outlive this operator.</param>
+    /// <param name="lda">Column stride of <paramref name="a"/>.</param>
     /// <param name="power">How many times to apply A. Must be at least 1.</param>
     public DenseMatrixOperator(int n, double* a, int lda, int power = 1)
     {
@@ -56,11 +59,14 @@ public sealed unsafe class DenseMatrixOperator : ILinearOperator, IDisposable
         _power = power;
     }
 
+    /// <inheritdoc/>
     public int Order => _n;
 
+    /// <inheritdoc/>
     public void Apply(int t, double* x, int ldx, double* y, int ldy) =>
         Repeat(t, x, ldx, y, ldy, transposed: false);
 
+    /// <inheritdoc/>
     public void ApplyTranspose(int t, double* x, int ldx, double* y, int ldy) =>
         Repeat(t, x, ldx, y, ldy, transposed: true);
 
@@ -109,6 +115,7 @@ public sealed unsafe class DenseMatrixOperator : ILinearOperator, IDisposable
         _workColumns = t;
     }
 
+    /// <summary>Release the ping-pong buffer used when the power exceeds one.</summary>
     public void Dispose()
     {
         if (_work is not null) { NativeMemory.AlignedFree(_work); _work = null; }
@@ -116,6 +123,7 @@ public sealed unsafe class DenseMatrixOperator : ILinearOperator, IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>Releases the native buffer if <see cref="Dispose"/> was not called.</summary>
     ~DenseMatrixOperator() => Dispose();
 }
 
@@ -129,6 +137,9 @@ public sealed unsafe class LuInverseOperator : ILinearOperator
 {
     private readonly LuFactorization _lu;
 
+    /// <summary>Wrap an LU factorization so the estimator can probe A^-1.</summary>
+    /// <param name="lu">A square factorization. Not owned, and must outlive this operator.</param>
+    /// <exception cref="ArgumentException">The factorization is not square.</exception>
     public LuInverseOperator(LuFactorization lu)
     {
         ArgumentNullException.ThrowIfNull(lu);
@@ -139,14 +150,17 @@ public sealed unsafe class LuInverseOperator : ILinearOperator
         _lu = lu;
     }
 
+    /// <inheritdoc/>
     public int Order => _lu.Rows;
 
+    /// <inheritdoc/>
     public void Apply(int t, double* x, int ldx, double* y, int ldy)
     {
         CopyInto(t, x, ldx, y, ldy);
         Lu.Solve(_lu, t, y, ldy);
     }
 
+    /// <inheritdoc/>
     public void ApplyTranspose(int t, double* x, int ldx, double* y, int ldy)
     {
         CopyInto(t, x, ldx, y, ldy);

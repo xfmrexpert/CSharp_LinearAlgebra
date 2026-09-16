@@ -1,4 +1,6 @@
-namespace GemmLab.Tests;
+using Tensile.Primitives;
+
+namespace Tensile.Tests;
 
 /// <summary>
 /// Triangular solves, checked by substituting the solution back.
@@ -23,7 +25,7 @@ public unsafe class TriangularTests
     public void SolveLowerUnitInvertsMultiplication(int m, int nrhs)
     {
         using var l = UnitLower(m, seed: 1);
-        using var x = Matrix.Random(m, nrhs, seed: 2);
+        using var x = TestMatrix.Random(m, nrhs, seed: 2);
         using var b = Multiply(l, x, unitLower: true, transposed: false);
 
         Triangular.SolveLowerUnit(m, nrhs, l.Data, l.Stride, b.Data, b.Stride);
@@ -36,7 +38,7 @@ public unsafe class TriangularTests
     public void SolveUpperInvertsMultiplication(int m, int nrhs)
     {
         using var u = Upper(m, seed: 3);
-        using var x = Matrix.Random(m, nrhs, seed: 4);
+        using var x = TestMatrix.Random(m, nrhs, seed: 4);
         using var b = Multiply(u, x, unitLower: false, transposed: false);
 
         Triangular.SolveUpper(m, nrhs, u.Data, u.Stride, b.Data, b.Stride);
@@ -49,7 +51,7 @@ public unsafe class TriangularTests
     public void SolveLowerUnitTransposedInvertsMultiplication(int m, int nrhs)
     {
         using var l = UnitLower(m, seed: 5);
-        using var x = Matrix.Random(m, nrhs, seed: 6);
+        using var x = TestMatrix.Random(m, nrhs, seed: 6);
         using var b = Multiply(l, x, unitLower: true, transposed: true);
 
         Triangular.SolveLowerUnitTransposed(m, nrhs, l.Data, l.Stride, b.Data, b.Stride);
@@ -62,7 +64,7 @@ public unsafe class TriangularTests
     public void SolveUpperTransposedInvertsMultiplication(int m, int nrhs)
     {
         using var u = Upper(m, seed: 7);
-        using var x = Matrix.Random(m, nrhs, seed: 8);
+        using var x = TestMatrix.Random(m, nrhs, seed: 8);
         using var b = Multiply(u, x, unitLower: false, transposed: true);
 
         Triangular.SolveUpperTransposed(m, nrhs, u.Data, u.Stride, b.Data, b.Stride);
@@ -81,7 +83,7 @@ public unsafe class TriangularTests
         const int m = 24, nrhs = 3;
 
         using var l = UnitLower(m, seed: 9);
-        using var x = Matrix.Random(m, nrhs, seed: 10);
+        using var x = TestMatrix.Random(m, nrhs, seed: 10);
         using var b = Multiply(l, x, unitLower: true, transposed: false);
 
         // Poison the strict upper triangle and the implicit unit diagonal.
@@ -95,9 +97,9 @@ public unsafe class TriangularTests
     }
 
     /// <summary>Unit lower triangular with a bounded strict lower part.</summary>
-    private static Matrix UnitLower(int m, int seed)
+    private static TestMatrix UnitLower(int m, int seed)
     {
-        var matrix = new Matrix(m, m, stride: m + 2);
+        var matrix = new TestMatrix(m, m, stride: m + 2);
         var rng = new Random(seed);
 
         for (int j = 0; j < m; j++)
@@ -108,9 +110,9 @@ public unsafe class TriangularTests
     }
 
     /// <summary>Upper triangular with a diagonal safely away from zero.</summary>
-    private static Matrix Upper(int m, int seed)
+    private static TestMatrix Upper(int m, int seed)
     {
-        var matrix = new Matrix(m, m, stride: m + 2);
+        var matrix = new TestMatrix(m, m, stride: m + 2);
         var rng = new Random(seed);
 
         for (int j = 0; j < m; j++)
@@ -126,10 +128,10 @@ public unsafe class TriangularTests
     /// B := T*X or T^T*X, computed the naive way so it is independent of
     /// anything under test.
     /// </summary>
-    private static Matrix Multiply(Matrix t, Matrix x, bool unitLower, bool transposed)
+    private static TestMatrix Multiply(TestMatrix t, TestMatrix x, bool unitLower, bool transposed)
     {
         int m = x.Rows;
-        var b = new Matrix(m, x.Columns, stride: m + 3);
+        var b = new TestMatrix(m, x.Columns, stride: m + 3);
 
         for (int col = 0; col < x.Columns; col++)
         {
@@ -151,7 +153,7 @@ public unsafe class TriangularTests
         return b;
     }
 
-    private static double Entry(Matrix t, int row, int column, bool unitLower)
+    private static double Entry(TestMatrix t, int row, int column, bool unitLower)
     {
         if (unitLower)
         {

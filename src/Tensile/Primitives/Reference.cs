@@ -1,4 +1,4 @@
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Unblocked reference implementation and accuracy checks. Slow on purpose:

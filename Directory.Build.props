@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Settings shared by every project. Kept here rather than duplicated so that
+    a change to the target framework or language version cannot apply to the
+    library but not its tests, which is exactly the kind of skew that makes a
+    benchmark or a test disagree with the thing it is measuring.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

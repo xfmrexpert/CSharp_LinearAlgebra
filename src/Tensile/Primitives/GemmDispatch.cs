@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace GemmLab;
+namespace Tensile.Primitives;
 
 /// <summary>
 /// Owns the packing buffers for both GEMM paths and picks between them by
@@ -96,6 +96,7 @@ public sealed unsafe class GemmDispatch : IDisposable
         Gemm.Multiply<TKernel>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, _serial!);
     }
 
+    /// <summary>Release both sets of packing buffers. Safe to call more than once.</summary>
     public void Dispose()
     {
         _serial?.Dispose();

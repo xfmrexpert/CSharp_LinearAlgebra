@@ -1,46 +1,51 @@
-# GemmLab — can RyuJIT compile a BLIS micro-kernel?
+# Tensile
 
-A minimal, dependency-free BLIS-style double-precision GEMM in C#, built to
-answer one question: **does RyuJIT keep a full set of vector accumulators in
-registers across the k-loop, or does it spill?**
+Dense linear algebra for .NET: blocked GEMM with hand-written micro-kernels, LU
+with partial pivoting, and 1-norm condition estimation. No native dependencies,
+no NuGet packages in the library itself.
 
-Everything above the micro-kernel (packing, five-loop blocking) is portable and
-translates from BLIS almost line for line. The micro-kernel is the only part
-where the JIT's code generation decides whether the whole idea is viable.
+It started as one question — **does RyuJIT keep a full set of vector
+accumulators in registers across the k-loop, or does it spill?** — and the
+answer turned out to be good enough to build on. The measurements behind that
+are still below, because they are the reason any of this is worth doing in
+managed code.
 
-## Contents
+```csharp
+using Tensile;
 
-| File | Purpose |
+using var a = Matrix.FromRows(new[,] { { 4.0, 1.0 }, { 1.0, 3.0 } });
+using var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
+
+using Matrix<double> x = a.Solve(b);
+
+using LuDecomposition lu = a.FactorLu();
+double rcond = lu.ReciprocalCondition();
+```
+
+**[Full API guide](docs/api.md)** — matrices and views, structure-typed
+dispatch, factorizations, norms, workspaces, and dropping to the primitive
+layer.
+
+## Layout
+
+| Path | Contents |
 |---|---|
-| `MicroKernels.cs` | `IMicroKernel` interface + AVX-512 16x8, AVX2/FMA 8x6, scalar 4x4 |
-| `Packing.cs` | A and B panel packing with zero-padded edges |
-| `Gemm.cs` | Five-loop blocked driver, generic over the kernel; scratch buffers |
-| `KernelProbe.cs` | Times the micro-kernel alone on L1-resident panels |
-| `Reference.cs` | Naive GEMM oracle + relative Frobenius residual |
-| `Blis.cs` | Optional native `bli_dgemm` binding, ABI/dispatch queries, single-thread setup |
-| `TimingStatistics.cs` | Shared median and interpolated quartiles for timing samples |
-| `ParallelGemm.cs` | Multi-threaded driver, parallel over the jr micro-panel loop |
-| `GemmDispatch.cs` | Owns both scratches; picks serial or threaded by work size |
-| `Blas1.cs`, `Blas2.cs` | Vectorised level-1 and narrow-panel level-2 primitives |
-| `Triangular.cs` | Triangular solves, including the transposed pair |
-| `Lu.cs` | Blocked right-looking LU with partial pivoting, solve, transpose solve |
-| `LinearOperators.cs` | `ILinearOperator` plus dense/matrix-power and LU-inverse operators |
-| `NormEstimate.cs` | Higham and Tisseur `normest1`; `dgecon`-equivalent `rcond` |
-| `Program.cs` | Shared correctness checks and benchmarks, managed/BLIS comparison |
-| `tests/GemmLab.Tests/` | xunit suite |
-| `disasm.sh` | Per-kernel disassembly and accumulator-spill check |
-
-Column-major throughout, unit row stride, double precision. The library takes no
-NuGet packages; only the test project does. The managed kernels have no native
-dependencies; the BLIS comparison requires a BLIS shared library and is skipped
-with a diagnostic if it cannot be loaded.
+| `src/Tensile` | The library. `Tensile` is the ergonomic layer; `Tensile.Primitives` is the allocation-free pointer layer; `Tensile.Interop` is the optional BLIS binding. |
+| `tests/Tensile.Tests` | xunit suite. Contracts generic over the micro-kernel run once per supported kernel. |
+| `bench/Tensile.Benchmarks` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep. |
+| `tools/Tensile.Diagnostics` | `tensile-diag`: host ISA, BLIS dispatch, estimator accuracy. Also the single process the codegen gate drives. |
+| `disasm.sh` | Dumps micro-kernel codegen and fails on accumulator spills. |
 
 ```
-dotnet run -c Release                 # verify, then benchmark everything
-dotnet run -c Release -- --verify-only # verify only; exits non-zero on failure
-dotnet test -c Release                 # the unit suite
-./disasm.sh                            # dump kernel codegen, fail on spills
+dotnet test Tensile.slnx -c Release                         # the unit suite
+dotnet run -c Release --project tools/Tensile.Diagnostics    # what this host supports
+dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*Gemm*'
+./disasm.sh                                                  # codegen gate
 ```
+
+Column-major throughout, unit row stride, double precision. `Matrix<T>` is
+generic over `unmanaged, INumberBase<T>` so storage and views already work for
+any numeric type; the arithmetic is `double`-only and adding a type is additive.
 
 The project targets `net10.0` and requires the .NET 10 SDK. The verification
 results below were originally collected on .NET 8.
@@ -59,7 +64,8 @@ The loader searches for `libblis.so` or `libblis.so.4` on Linux,
 For a custom build or another library name, specify the shared library explicitly:
 
 ```bash
-GEMMLAB_BLIS_LIBRARY=/absolute/path/to/libblis.so dotnet run -c Release
+TENSILE_BLIS_LIBRARY=/absolute/path/to/libblis.so \
+  dotnet run -c Release --project tools/Tensile.Diagnostics
 ```
 
 An explicit override is authoritative: it does not fall back to the system BLIS.
@@ -77,7 +83,7 @@ type. On this machine BLIS 0.9.0 reports `haswell`; the library name and version
 alone do not establish this. A `generic` architecture, unknown dispatch, or a
 non-optimized kernel classification produces a warning. Do not treat such a run
 as a comparison against optimized BLIS: rebuild BLIS from source with
-`./configure auto`, then `make -j`, and point `GEMMLAB_BLIS_LIBRARY` at the built
+`./configure auto`, then `make -j`, and point `TENSILE_BLIS_LIBRARY` at the built
 shared library. Recheck the reported dispatch before interpreting ratios.
 
 These queries identify the selected architecture and registered native packed
@@ -114,7 +120,7 @@ do not infer the CPU model or core type from logical-core count alone:
 ```bash
 lscpu -e=CPU,CORE,SOCKET,MAXMHZ,ONLINE
 taskset -pc $$
-taskset -c 0 dotnet run -c Release
+taskset -c 0 dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*Gemm*'
 ```
 
 CPU 0 is an allowed, SMT-enabled higher-clocked core on the verification machine.
@@ -130,7 +136,7 @@ its GC mode. A full 31-sample run takes longer, especially for the scalar backen
 Run correctness checks without benchmarks:
 
 ```bash
-taskset -c 0 dotnet run -c Release -- --verify-only
+taskset -c 0 dotnet run -c Release --project tools/Tensile.Diagnostics
 ```
 
 Each supported backend is checked against the naive oracle on ragged and empty

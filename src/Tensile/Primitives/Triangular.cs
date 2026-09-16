@@ -116,6 +116,53 @@ internal static unsafe class Triangular
     }
 
     /// <summary>
+    /// Solve L * X = B in place, L being m x m lower triangular with an
+    /// explicit diagonal.
+    ///
+    /// The unit-diagonal variant above is what LU produces and is the hot one;
+    /// this exists for a standalone lower-triangular operand, and is written
+    /// one right-hand side at a time because nothing on a hot path calls it
+    /// yet. Block it by four, as SolveLowerUnit is, if that changes.
+    /// </summary>
+    public static void SolveLower(int m, int n, double* l, int ldl, double* b, int ldb)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            double* column = b + (nint)j * ldb;
+
+            for (int p = 0; p < m; p++)
+            {
+                double* lp = l + (nint)p * ldl;
+
+                column[p] /= lp[p];
+
+                double value = column[p];
+                if (value != 0.0 && p + 1 < m)
+                    Blas1.Axpy(m - p - 1, -value, lp + p + 1, column + p + 1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Solve L^T * X = B in place, L being m x m lower triangular with an
+    /// explicit diagonal. L^T is upper triangular, so this is backward
+    /// substitution by inner products down columns of L.
+    /// </summary>
+    public static void SolveLowerTransposed(int m, int n, double* l, int ldl, double* b, int ldb)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            double* column = b + (nint)j * ldb;
+
+            for (int i = m - 1; i >= 0; i--)
+            {
+                double* li = l + (nint)i * ldl;
+                column[i] = (column[i] - Blas1.Dot(m - i - 1, li + i + 1, column + i + 1)) / li[i];
+            }
+        }
+    }
+
+    /// <summary>
     /// Solve U^T * X = B in place, U being m x m upper triangular with an
     /// explicit diagonal.
     ///

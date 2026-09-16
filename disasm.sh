@@ -8,9 +8,12 @@
 #
 # Two details matter and are easy to get wrong:
 #
-#   * Run the built binary directly, NOT via `dotnet run`. The SDK and the app
-#     are separate processes and both honour DOTNET_JitStdOutFile, so they
-#     clobber each other's output and kernels go missing from the dump.
+#   * Run the built binary directly, NOT via `dotnet run`, and not via the
+#     benchmark project. The SDK driver, and BenchmarkDotNet's generated child
+#     processes, are separate processes that also honour DOTNET_JitStdOutFile,
+#     so they clobber each other's output and kernels go missing from the dump.
+#     tools/Tensile.Diagnostics exists to be a single process that calls every
+#     supported kernel and then exits.
 #
 #   * Scope the spill search to the kernels. The dump is filtered by method
 #     name, and plenty of unrelated framework methods are also called Execute.
@@ -21,18 +24,19 @@ set -euo pipefail
 
 CONFIGURATION="${CONFIGURATION:-Release}"
 OUT="${1:-kernel.asm}"
-BINARY="${BINARY:-./bin/${CONFIGURATION}/net10.0/GemmLab}"
+PROJECT="tools/Tensile.Diagnostics/Tensile.Diagnostics.csproj"
+BINARY="${BINARY:-./tools/Tensile.Diagnostics/bin/${CONFIGURATION}/net10.0/tensile-diag}"
 
 if [[ ! -x "$BINARY" ]]; then
     echo "building $CONFIGURATION first ($BINARY not found)"
-    dotnet build -c "$CONFIGURATION" GemmLab.csproj >/dev/null
+    dotnet build -c "$CONFIGURATION" "$PROJECT" >/dev/null
 fi
 
 DOTNET_JitDisasm="Execute" \
 DOTNET_JitStdOutFile="$OUT" \
 DOTNET_TieredCompilation=0 \
 DOTNET_ReadyToRun=0 \
-"$BINARY" --verify-only >/dev/null
+"$BINARY" --quiet >/dev/null
 
 echo "disassembly written to $OUT"
 echo
@@ -57,18 +61,19 @@ SPILL_PATTERN='vmov(ups|apd|upd) +(zmm|ymm)word ptr \[(rbp|rsp)'
 FOUND=0
 FAILED=0
 
-printf '%-34s %8s %8s\n' "kernel" "FMAs" "spills"
+printf '%-30s %8s %8s\n' "kernel" "FMAs" "spills"
 
-for listing in "$WORK"/GemmLab.*Kernel*Execute.txt; do
+for listing in "$WORK"/Tensile.Primitives.*Kernel*Execute.txt; do
     [[ -e "$listing" ]] || continue
 
     FOUND=$((FOUND + 1))
     name="$(basename "$listing" .txt)"
+    name="${name#Tensile.Primitives.}"
 
     fmas=$(grep -c "vfmadd" "$listing" || true)
     spills=$(grep -cE "$SPILL_PATTERN" "$listing" || true)
 
-    printf '%-34s %8s %8s\n' "$name" "$fmas" "$spills"
+    printf '%-30s %8s %8s\n' "$name" "$fmas" "$spills"
 
     if [[ "$spills" -ne 0 ]]; then
         echo

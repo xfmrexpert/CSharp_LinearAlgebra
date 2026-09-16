@@ -124,12 +124,19 @@ public sealed class Workspace : IDisposable
     /// <summary>
     /// Factor <paramref name="a"/> in place as P*A = L*U. The caller's storage
     /// is overwritten with the packed factors.
+    ///
+    /// This is the zero-copy counterpart to
+    /// <see cref="MatrixOperations.FactorLu"/>, which copies so the caller's
+    /// matrix survives. Use this one when the input is already scratch.
     /// </summary>
-    /// <param name="a">The matrix to factor, overwritten.</param>
+    /// <param name="a">The matrix to factor, overwritten with the packed factors.</param>
     /// <param name="blockSize">Panel width; zero selects the default.</param>
-    /// <returns>The pivot array and diagnostics. The caller owns the factors.</returns>
+    /// <returns>
+    /// The pivot array and diagnostics, which must be disposed. It does not own
+    /// the factors, so <paramref name="a"/> must outlive it.
+    /// </returns>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    internal unsafe LuFactorization FactorLu(MatrixView<double> a, int blockSize)
+    public unsafe LuFactorization FactorLu(MatrixView<double> a, int blockSize = 0)
     {
         lock (_gate)
         {

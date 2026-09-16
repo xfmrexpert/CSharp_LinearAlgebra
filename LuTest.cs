@@ -18,7 +18,7 @@ public static unsafe class LuTest
 
     private const double Epsilon = 2.220446049250313e-16;
 
-    public static void Run<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
+    public static bool Run<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
     {
         Console.WriteLine();
         Console.WriteLine($"=== LU (partial pivoting, GEMM update via {TKernel.Name}) ===");
@@ -26,12 +26,14 @@ public static unsafe class LuTest
         if (!TKernel.IsSupported)
         {
             Console.WriteLine("  not supported on this CPU, skipping");
-            return;
+            return true;
         }
 
-        if (!Verify<TKernel>() || verifyOnly) return;
+        if (!Verify<TKernel>()) return false;
+        if (verifyOnly) return true;
 
         Benchmark<TKernel>();
+        return true;
     }
 
     private static bool Verify<TKernel>() where TKernel : struct, IMicroKernel
@@ -46,7 +48,7 @@ public static unsafe class LuTest
         double worstFactor = 0.0;
         double worstSolve = 0.0;
 
-        using var scratch = GemmScratch.For<TKernel>();
+        using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
         foreach ((int rows, int columns) in shapes)
         foreach (int blockSize in new[] { 8, 64 })
@@ -57,9 +59,9 @@ public static unsafe class LuTest
             double* original = RandomMatrix(rows, columns, stride, seed: 17, illConditioned);
             double* factors = CopyMatrix(original, stride * columns);
 
-            using var lu = Lu.Factor<TKernel>(rows, columns, factors, stride, scratch, blockSize);
+            using var lu = Lu.Factor<TKernel>(rows, columns, factors, stride, gemm, blockSize);
 
-            double residual = FactorizationResidual<TKernel>(lu, original, stride, scratch);
+            double residual = FactorizationResidual<TKernel>(lu, original, stride, gemm);
             worstFactor = Math.Max(worstFactor, residual);
 
             double threshold = 64.0 * Math.Max(rows, columns) * Epsilon;
@@ -89,7 +91,7 @@ public static unsafe class LuTest
             NativeMemory.AlignedFree(factors);
         }
 
-        passed &= VerifySingularDetection<TKernel>(scratch);
+        passed &= VerifySingularDetection<TKernel>(gemm);
 
         Console.WriteLine($"  correctness   : {(passed ? "PASS" : "FAIL")}");
         Console.WriteLine($"  worst ||PA-LU||_F / ||A||_F : {worstFactor:E3}");
@@ -108,7 +110,7 @@ public static unsafe class LuTest
     /// completes -- the same behaviour as dgetrf. Detecting that case needs a
     /// condition estimate, and PivotRatio is the cheap stand-in.
     /// </summary>
-    private static bool VerifySingularDetection<TKernel>(GemmScratch scratch)
+    private static bool VerifySingularDetection<TKernel>(GemmDispatch gemm)
         where TKernel : struct, IMicroKernel
     {
         const int n = 40;
@@ -117,7 +119,7 @@ public static unsafe class LuTest
         double* exact = RandomMatrix(n, n, n, seed: 5, illConditioned: false);
         new Span<double>(exact + 7 * n, n).Clear();
 
-        using (var lu = Lu.Factor<TKernel>(n, n, exact, n, scratch, 8))
+        using (var lu = Lu.Factor<TKernel>(n, n, exact, n, gemm, 8))
         {
             if (!lu.IsSingular)
             {
@@ -132,7 +134,7 @@ public static unsafe class LuTest
         Buffer.MemoryCopy(duplicate + 3 * n, duplicate + 7 * n,
             (long)n * sizeof(double), (long)n * sizeof(double));
 
-        using (var lu = Lu.Factor<TKernel>(n, n, duplicate, n, scratch, 8))
+        using (var lu = Lu.Factor<TKernel>(n, n, duplicate, n, gemm, 8))
         {
             Console.WriteLine($"  rank-deficient: exact zero pivot={lu.IsSingular}, "
                             + $"pivot ratio={lu.PivotRatio:E3}");
@@ -150,7 +152,7 @@ public static unsafe class LuTest
 
     /// <summary>||P*A - L*U||_F / ||A||_F, computed by rebuilding the product.</summary>
     private static double FactorizationResidual<TKernel>(
-        LuFactorization lu, double* original, int stride, GemmScratch scratch)
+        LuFactorization lu, double* original, int stride, GemmDispatch gemm)
         where TKernel : struct, IMicroKernel
     {
         int m = lu.Rows, n = lu.Columns, k = Math.Min(m, n);
@@ -175,7 +177,7 @@ public static unsafe class LuTest
             for (int i = 0; i < k && i <= j; i++)
                 upper[(nint)j * k + i] = lu.Factors[(nint)j * stride + i];
 
-        Gemm.Multiply<TKernel>(m, n, k, 1.0, lower, m, upper, k, 0.0, product, m, scratch);
+        gemm.MultiplySerial<TKernel>(m, n, k, 1.0, lower, m, upper, k, 0.0, product, m);
 
         // product currently holds P*A; undo the permutation to compare with A.
         Lu.UnswapRows(product, m, 0, n, lu.Pivots, 0, k);
@@ -245,13 +247,17 @@ public static unsafe class LuTest
 
     private static void Benchmark<TKernel>() where TKernel : struct, IMicroKernel
     {
-        using var scratch = GemmScratch.For<TKernel>();
+        using var gemm = GemmDispatch.Multithreaded<TKernel>();
 
-        Console.WriteLine("     size       nb    median (ms)      GFLOP/s   % of GEMM");
+        // The reference GEMM goes through the same dispatch the factorization
+        // uses, so the ratio compares like with like. Measuring LU's threaded
+        // trailing update against a single-threaded GEMM would flatter it by
+        // whatever the machine's thread count buys.
+        Console.WriteLine("     size       nb    median (ms)      GFLOP/s   % of same-path GEMM");
 
         foreach (int size in BenchSizes)
         {
-            double gemmGflops = MeasureGemm<TKernel>(size, scratch);
+            double gemmGflops = MeasureGemm<TKernel>(size, gemm);
 
             foreach (int blockSize in BlockSizes)
             {
@@ -268,7 +274,7 @@ public static unsafe class LuTest
                 {
                     Buffer.MemoryCopy(master, work, bytes, bytes);
                     long started = Stopwatch.GetTimestamp();
-                    using (Lu.Factor<TKernel>(size, size, work, size, scratch, blockSize)) { }
+                    using (Lu.Factor<TKernel>(size, size, work, size, gemm, blockSize)) { }
                     double elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
                     if (r >= 0) samples[r] = elapsed;
                 }
@@ -292,7 +298,7 @@ public static unsafe class LuTest
     }
 
     /// <summary>Same-size GEMM rate, so LU can be reported as a fraction of it.</summary>
-    private static double MeasureGemm<TKernel>(int size, GemmScratch scratch)
+    private static double MeasureGemm<TKernel>(int size, GemmDispatch gemm)
         where TKernel : struct, IMicroKernel
     {
         double* a = RandomMatrix(size, size, size, seed: 1, illConditioned: false);
@@ -300,14 +306,14 @@ public static unsafe class LuTest
         double* c = Alloc((nuint)size * (nuint)size);
 
         for (int w = 0; w < 2; w++)
-            Gemm.Multiply<TKernel>(size, size, size, 1.0, a, size, b, size, 0.0, c, size, scratch);
+            gemm.Multiply<TKernel>(size, size, size, 1.0, a, size, b, size, 0.0, c, size);
 
         int reps = 5;
         var samples = new double[reps];
         for (int r = 0; r < reps; r++)
         {
             long started = Stopwatch.GetTimestamp();
-            Gemm.Multiply<TKernel>(size, size, size, 1.0, a, size, b, size, 0.0, c, size, scratch);
+            gemm.Multiply<TKernel>(size, size, size, 1.0, a, size, b, size, 0.0, c, size);
             samples[r] = Stopwatch.GetElapsedTime(started).TotalSeconds;
         }
 

@@ -96,7 +96,7 @@ public static unsafe class Lu
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static LuFactorization Factor<TKernel>(
-        int m, int n, double* a, int lda, GemmScratch scratch, int blockSize = DefaultBlockSize)
+        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = DefaultBlockSize)
         where TKernel : struct, IMicroKernel
     {
         var result = new LuFactorization(m, n, lda, a);
@@ -140,13 +140,15 @@ public static unsafe class Lu
 
             if (jb + width >= m) continue;
 
-            // A22 := A22 - A21 * U12. This is the blocked part.
-            Gemm.Multiply<TKernel>(
+            // A22 := A22 - A21 * U12. This is the blocked part, and the only
+            // level-3 operation in the factorization, so it is the one worth
+            // threading. The dispatch drops back to the serial path by itself
+            // once the trailing submatrix stops being worth a fork/join.
+            gemm.Multiply<TKernel>(
                 m - jb - width, n - jb - width, width,
                 -1.0, a + (nint)jb * lda + (jb + width), lda,
                 a + (nint)(jb + width) * lda + jb, lda,
-                1.0, a + (nint)(jb + width) * lda + (jb + width), lda,
-                scratch);
+                1.0, a + (nint)(jb + width) * lda + (jb + width), lda);
         }
 
         RecordPivotRange(result);
@@ -192,6 +194,33 @@ public static unsafe class Lu
         SwapRows(b, ldb, 0, nrhs, lu.Pivots, 0, n);
         Triangular.SolveLowerUnit(n, nrhs, lu.Factors, lu.Stride, b, ldb);
         Triangular.SolveUpper(n, nrhs, lu.Factors, lu.Stride, b, ldb);
+    }
+
+    /// <summary>
+    /// Solve A^T * X = B for an already-factored square A. B is n x nrhs,
+    /// column-major, overwritten with the solution.
+    ///
+    /// P*A = L*U gives A = P^T*L*U and so A^T = U^T*L^T*P. The permutation
+    /// therefore lands last and in reverse, rather than first and forward as it
+    /// does in the untransposed solve.
+    ///
+    /// Needed by the 1-norm condition estimator, which alternates products with
+    /// A^-1 and A^-T.
+    /// </summary>
+    public static void SolveTransposed(LuFactorization lu, int nrhs, double* b, int ldb)
+    {
+        if (!lu.IsSquare)
+            throw new ArgumentException("SolveTransposed requires a square factorization.", nameof(lu));
+        if (lu.IsSingular)
+            throw new InvalidOperationException(
+                $"Matrix is singular: zero pivot at column {lu.SingularColumn}.");
+
+        int n = lu.Rows;
+        if (n == 0 || nrhs == 0) return;
+
+        Triangular.SolveUpperTransposed(n, nrhs, lu.Factors, lu.Stride, b, ldb);
+        Triangular.SolveLowerUnitTransposed(n, nrhs, lu.Factors, lu.Stride, b, ldb);
+        UnswapRows(b, ldb, 0, nrhs, lu.Pivots, 0, n);
     }
 
     /// <summary>

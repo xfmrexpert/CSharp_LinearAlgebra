@@ -37,8 +37,10 @@ the managed-vs-native question is a first-class motivation, not just a means.
 
 # Current state
 
-Single project, `net10.0`, no NuGet packages, column-major throughout, unit row
-stride, double precision only, no transposes, no complex yet.
+Library plus a test project, `net10.0`, column-major throughout, unit row
+stride, double precision only, no transposes in GEMM, no complex yet. The
+library itself still takes no package references; the test project takes
+xunit.v3.
 
 | File | Purpose |
 | --- | --- |
@@ -46,15 +48,23 @@ stride, double precision only, no transposes, no complex yet.
 | `Packing.cs` | A/B panel packing, zero-padded edges, panel-range variants for parallel packing |
 | `Gemm.cs` | Five-loop blocked GEMM, generic over kernel, single-threaded |
 | `ParallelGemm.cs` | Multi-threaded GEMM, loop-2 (jr) parallelism |
+| `GemmDispatch.cs` | Owns both scratches, picks serial vs threaded by work size |
 | `KernelProbe.cs` | Micro-kernel ceiling on L1-resident panels |
 | `Blis.cs` | Optional native `bli_dgemm` binding + dispatch/ABI queries |
 | `Reference.cs` | Naive GEMM oracle + relative Frobenius residual |
 | `TimingStatistics.cs` | Median and interpolated quartiles |
-| `Program.cs` | Correctness checks and benchmarks for all backends |
-| `Blas1.cs` | Vectorised scal/axpy/iamax for the LU panel |
-| `Triangular.cs` | Unblocked TRSM, blocked by 4 right-hand sides |
-| `Lu.cs` | Blocked right-looking LU with partial pivoting |
+| `Program.cs` | Correctness checks and benchmarks; exits non-zero on failure |
+| `Blas1.cs` | Vectorised scal/axpy/iamax/dot for the LU panel |
+| `Blas2.cs` | A*X and A^T*X for narrow panels, used by the norm estimator |
+| `Triangular.cs` | Unblocked TRSM, blocked by 4 right-hand sides, plus transposed solves |
+| `Lu.cs` | Blocked right-looking LU with partial pivoting, solve and transpose solve |
+| `LinearOperators.cs` | `ILinearOperator`, dense/matrix-power and LU-inverse operators |
+| `NormEstimate.cs` | `normest1`, exact 1- and inf-norms, `dgecon`-equivalent rcond |
 | `LuTest.cs` | LU residual verification + block-size sweep |
+| `NormEstimateTest.cs` | Estimator accuracy by ensemble, rcond checks, cost report |
+| `tests/GemmLab.Tests/` | xunit suite, 649 tests, run per supported micro-kernel |
+| `.github/workflows/ci.yml` | Build, test, harness, and the kernel spill gate |
+| `disasm.sh` | Per-kernel JIT disassembly + accumulator-spill check, CI-gating |
 
 The architecture is three layers, deliberately: storage/views, allocation-free
 span-based kernels, then an ergonomic layer. Only the middle layer exists so
@@ -141,6 +151,13 @@ LAPACK norm is roughly 70-80% of GEMM, so ~20% remains. Note the block-size
 optimum shifts with n (32 below 2048, 64 at 2048); a size-dependent default is
 probably right once measured on real hardware.
 
+**These numbers predate routing the trailing update through `ParallelGemm`, and
+the "% of same-size GEMM" column they came from compared serial LU against
+serial GEMM.** Both sides now go through `GemmDispatch`, so the ratio compares
+like with like and the whole table needs re-taking. Comparing a threaded LU
+against a serial GEMM reads as ~97% at n=2048, which measures the thread count
+and not the factorization.
+
 Phase breakdown at n=2048, nb=64 after optimisation: GEMM 65%, panel 14%,
 swaps 10%, TRSM 11%.
 
@@ -187,6 +204,44 @@ well- and ill-conditioned inputs.
    on a laptop part. Later configurations run heat-soaked. Re-running the sweep
    in reverse order is the cheap decisive test; this has NOT been done yet.
 
+8. **A heuristic estimator needs invariant tests, not accuracy tests.**
+   `normest1` returns a lower bound, so underestimating is correct behaviour
+   and "wrong answer" and "unlucky answer" are indistinguishable from a single
+   result. What pins it down is three properties that must hold exactly:
+   - it never exceeds the true 1-norm, because every probe is a genuine
+     `||Ax||_1` at `||x||_1 = 1`;
+   - with `t = n` probe columns it is exact, because the second iteration
+     probes every unit vector and therefore every column;
+   - with `A >= 0` it is exact, because the first sign matrix is all ones, so
+     `A^T S` is literally the vector of column sums and the first sort lands on
+     the true maximiser.
+
+   Between them these exercise the sign matrix, the transposed product, the row
+   maxima, the descending sort and the unit-vector selection, without asserting
+   any particular estimate. On uniform random signed matrices the estimator is
+   exact only ~38% of the time at `t=2` (55% at `t=4`) — that is the ensemble,
+   not a defect: random column 1-norms cluster within a few percent of each
+   other, so picking the exact argmax among n near-ties is hard and missing it
+   is nearly free. Worst observed ratio is 0.76, well inside the factor-of-2
+   the algorithm promises.
+
+9. **Dumping JIT disassembly through `dotnet run` loses methods.** The SDK
+   driver and the application are separate processes and both honour
+   `DOTNET_JitStdOutFile`, so they clobber the same file: the dump ends up with
+   framework methods in it and, worse, silently missing kernels — the AVX-512
+   kernel vanished from a dump that still looked plausible. Run the built
+   binary directly, and scope the spill grep to the kernel listings, since
+   plenty of unrelated framework methods are also called `Execute`.
+
+10. **Code with no caller is not verified by anything.** `Lu.cs`,
+    `LuTest.cs`, `Blas1.cs` and `Triangular.cs` all arrived in one commit that
+    did not touch `Program.cs`, so `LuTest.Run` was unreachable and LU had
+    never been exercised by this repository's entry point — while this file
+    quoted its residuals as established. The residuals were real, but they came
+    from somewhere else. This is the specific failure that "verification means
+    a human reads stdout" produces, and the reason `--verify-only` now returns
+    an exit code and CI runs it.
+
 ---
 
 # Design decisions and why
@@ -226,36 +281,44 @@ well- and ill-conditioned inputs.
   KC=256/MC=144 used in `ParallelGemm` measured better on the 12700H at every
   size below 2048 (n=128: 47.0 vs 35.1 GFLOP/s). This has not been ported to
   the serial path.
-- **Small-n threading is a real defect**, not thermal: at n=128 every
-  configuration gives 0.8-1.0x. Fork/join overhead dominates a 0.1 ms problem.
-  A work-based thread-count threshold is drafted but not applied:
-  `Math.Clamp((int)((long)m*n*k / 12_000_000), 1, MaxThreads)`, and the default
-  should cap at 8 rather than `ProcessorCount`.
-- **LU has not been run on the 12700H.**
+- **Small-n threading.** A work-based threshold *is* applied in
+  `ParallelGemm.Multiply` —
+  `Math.Clamp((int)(work / 8_000_000), 1, scratch.MaxThreads)` — with divisor
+  8M rather than the 12M once drafted, and no cap at 8: `MaxThreads` still
+  defaults to `ProcessorCount`. Whether this actually fixed the n=128 case has
+  not been re-measured on the 12700H, so the earlier 0.8-1.0x figures may
+  predate it.
+- **`GemmDispatch.ParallelThreshold` (4e6 flops) is derived, not measured.**
+  It decides serial vs threaded for every LU trailing update. Sweep it.
+- **LU has not been run on the 12700H**, and its results table now needs
+  re-taking anyway (see above).
 - **Reverse-order thread sweep not done** (see finding 7).
-- **`Pasted Text.txt` is committed to the repo** and looks accidental.
-- No LICENSE file, no test project, no CI.
+- **`normest1` has not been cross-validated against MATLAB's `normest1` or
+  LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
+  which is strong evidence but not the same thing.
+- **The estimator's `Blas2` products are O(n^2 t) with no blocking.** Fine at
+  the sizes that matter for `dgecon`, possibly not for `expm`'s inner loop.
 
 # Next steps, in priority order
 
-1. **`normest1`** — Higham & Tisseur's block 1-norm estimator. This is the
-   highest-value next piece because it serves twice: it gives `dgecon`
-   -equivalent condition estimation for LU, and it is the exact primitive
-   Al-Mohy & Higham's `expm` needs to choose the scaling parameter.
-2. **`expm`** via Al-Mohy & Higham (2009) scaling-and-squaring with degree-13
+`normest1` and the LU/`ParallelGemm` routing that used to head this list are
+done; so are the test project, CI and the licence. What remains:
+
+1. **`expm`** via Al-Mohy & Higham (2009) scaling-and-squaring with degree-13
    Pade. Use the 2009 algorithm, not Higham 2005: it picks the scaling from
    estimates of `||A^k||^(1/k)` rather than `||A||`, which specifically
    mitigates overscaling on stiff matrices — exactly the MTL/FEM state matrices
    this is for. Moler & Van Loan's "Nineteen Dubious Ways" is the reference to
    keep open.
-3. **`expmv`** (Al-Mohy & Higham 2011) — computes `exp(A t) b` without forming
+2. **`expmv`** (Al-Mohy & Higham 2011) — computes `exp(A t) b` without forming
    the exponential, a few dozen matvecs instead of ~15-25 GEMM-equivalents.
    For a transient sweep this is likely a 100x algorithmic win that dwarfs any
    further kernel tuning, and it is the natural bridge to sparse.
-4. Route the LU trailing update through `ParallelGemm`.
-5. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
+3. Re-take the LU table on the 12700H now that both sides of the ratio use the
+   same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while there.
+4. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
    GEMM.
-6. Complex support. `System.Numerics.Complex` is interleaved, which matches
+5. Complex support. `System.Numerics.Complex` is interleaved, which matches
    `zgemm` layout but vectorises badly; a split (SoA) representation is 2-4x
    faster for element-wise work. Start interleaved, switch only if profiling of
    real assembly workloads says so.
@@ -288,6 +351,41 @@ than on things no BLAS-lineage library can express:
 
 ---
 
+# Testing
+
+```
+dotnet test -c Release                  # unit suite
+dotnet run -c Release -- --verify-only  # whole-program harness, exits non-zero on failure
+./disasm.sh                             # kernel codegen gate
+```
+
+Three layers, deliberately overlapping:
+
+- **The xunit suite** (`tests/GemmLab.Tests`) is the regression net. Every
+  contract that is generic over the micro-kernel runs once per kernel, via an
+  abstract base class with one concrete subclass each; a kernel the host cannot
+  run is reported *skipped*, never silently passed. Internals are visible to it
+  because `Packing`, `Blas1`, `Blas2` and `Triangular` are exactly where an
+  off-by-one hides.
+- **The console harness** (`Program.cs`) covers what unit tests cannot: BLIS
+  dispatch reporting, the benchmark plumbing itself, and sweeps large enough to
+  be worth reporting rather than asserting. `--verify-only` skips the
+  benchmarks and returns an exit code.
+- **`disasm.sh`** is the codegen gate, and it is the one CI job that cannot be
+  replaced by a test: correctness is unaffected by a spill, only speed is.
+
+Guidance that has already been paid for once:
+
+- **Never assert bit-identical results between two code paths.** The blocked and
+  unblocked LU paths agree to 7e-15, not to zero, because the blocked one sums
+  its trailing update through GEMM. Assert the pivot sequence exactly (integer
+  choices) and the factors by tolerance.
+- **Test a heuristic by its invariants**, not by its accuracy. See finding 8.
+- **A `Skip` that is really an early `return` is a lie.** This is why the suite
+  is on xunit.v3, which has `Assert.Skip`.
+
+---
+
 # Benchmarking methodology
 
 Non-negotiable, because several early conclusions were artifacts:
@@ -296,8 +394,12 @@ Non-negotiable, because several early conclusions were artifacts:
   latency.
 - `[MethodImpl(MethodImplOptions.AggressiveOptimization)]` on every hot path.
 - `taskset -c 0` for single-thread comparisons; unpinned for scaling.
-- Check the disassembly for spills after any kernel change:
-  `grep -E "vmov(ups|apd|upd) +(zmm|ymm)word ptr \[(rbp|rsp)" kernel.asm`
+- Check the disassembly for spills after any kernel change: run `./disasm.sh`,
+  which does this per kernel and exits non-zero on a spill. CI runs it too.
+  Do NOT dump the disassembly via `dotnet run`: the SDK and the app are
+  separate processes and both honour `DOTNET_JitStdOutFile`, so they overwrite
+  each other's output and kernels silently go missing from the dump. Run the
+  built binary directly.
 - Verify BLIS dispatch via `bli_arch_string` before quoting any ratio; a
   `generic` architecture means the comparison is against a fallback.
 - Capture `turbostat --interval 1` alongside multi-threaded runs on laptop

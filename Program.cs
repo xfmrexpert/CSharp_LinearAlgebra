@@ -18,25 +18,53 @@ public static unsafe class Program
         double* right, int rightStride,
         double beta, double* result, int resultStride);
 
-    public static void Main(string[] args)
+    /// <summary>
+    /// Returns 0 if every verification passed, 1 otherwise, so that
+    /// `GemmLab --verify-only` can be used as a CI gate.
+    /// </summary>
+    public static int Main(string[] args)
     {
         bool verifyOnly = args.Contains("--verify-only");
         PrintEnvironment();
-        if (!VerifyTimingStatistics()) return;
+        if (!VerifyTimingStatistics()) return 1;
 
-        RunBlis(verifyOnly);
+        bool passed = true;
 
-        RunIfSupported<Avx512Kernel16x8>(verifyOnly);
-        RunIfSupported<Avx2Kernel8x6>(verifyOnly);
-        RunIfSupported<ScalarKernel4x4>(verifyOnly);
+        passed &= RunBlis(verifyOnly);
 
-        RunParallel<Avx512Kernel16x8>(verifyOnly);
-        RunParallel<Avx2Kernel8x6>(verifyOnly);
+        passed &= RunIfSupported<Avx512Kernel16x8>(verifyOnly);
+        passed &= RunIfSupported<Avx2Kernel8x6>(verifyOnly);
+        passed &= RunIfSupported<ScalarKernel4x4>(verifyOnly);
+
+        passed &= RunParallel<Avx512Kernel16x8>(verifyOnly);
+        passed &= RunParallel<Avx2Kernel8x6>(verifyOnly);
+
+        // LU and the norm estimator run on the best kernel the CPU supports;
+        // they exercise the GEMM path already verified above, so repeating them
+        // per kernel would only re-measure the same thing.
+        passed &= RunFactorizations(verifyOnly);
 
         if (!verifyOnly) BenchmarkReference(256);
+
+        Console.WriteLine();
+        Console.WriteLine(passed ? "ALL VERIFICATIONS PASSED" : "VERIFICATION FAILURES -- see above");
+
+        return passed ? 0 : 1;
     }
 
-    private static void RunBlis(bool verifyOnly)
+    /// <summary>LU, condition estimation and normest1 on the widest supported kernel.</summary>
+    private static bool RunFactorizations(bool verifyOnly)
+    {
+        if (Avx512Kernel16x8.IsSupported)
+            return LuTest.Run<Avx512Kernel16x8>(verifyOnly) & NormEstimateTest.Run<Avx512Kernel16x8>(verifyOnly);
+
+        if (Avx2Kernel8x6.IsSupported)
+            return LuTest.Run<Avx2Kernel8x6>(verifyOnly) & NormEstimateTest.Run<Avx2Kernel8x6>(verifyOnly);
+
+        return LuTest.Run<ScalarKernel4x4>(verifyOnly) & NormEstimateTest.Run<ScalarKernel4x4>(verifyOnly);
+    }
+
+    private static bool RunBlis(bool verifyOnly)
     {
         Console.WriteLine();
         Console.WriteLine("=== BLIS (native, single-threaded) ===");
@@ -45,7 +73,7 @@ public static unsafe class Program
         if (blis is null)
         {
             Console.WriteLine($"  unavailable, skipping: {reason}");
-            return;
+            return true;
         }
 
         Console.WriteLine($"  library       : {blis.LibraryName} (BLIS {blis.Version}, {blis.IntegerBits}-bit integers)");
@@ -54,12 +82,14 @@ public static unsafe class Program
         Console.WriteLine($"  threads       : {blis.Threads}");
         if (blis.Architecture is "generic" or "unknown" || blis.GemmKernelImplementation != "optimized")
             Console.WriteLine("  WARNING: optimized BLIS dispatch is not confirmed; rebuild BLIS with ./configure auto before drawing performance conclusions.");
-        if (!Verify(blis.Multiply, 16, 8) || verifyOnly) return;
+        if (!Verify(blis.Multiply, 16, 8)) return false;
+        if (verifyOnly) return true;
 
         _blisGflops = Benchmark(blis.Multiply);
+        return true;
     }
 
-    private static void RunIfSupported<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
+    private static bool RunIfSupported<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
     {
         Console.WriteLine();
         Console.WriteLine($"=== {TKernel.Name} (MR={TKernel.Mr}, NR={TKernel.Nr}) ===");
@@ -67,16 +97,18 @@ public static unsafe class Program
         if (!TKernel.IsSupported)
         {
             Console.WriteLine("  not supported on this CPU, skipping");
-            return;
+            return true;
         }
 
-        if (!Verify<TKernel>() || verifyOnly) return;
+        if (!Verify<TKernel>()) return false;
+        if (verifyOnly) return true;
 
         var probe = KernelProbe.Measure<TKernel>();
         Console.WriteLine($"  kernel ceiling: {probe.Gflops:F2} GFLOP/s (median, L1-resident panels, no packing)");
         Console.WriteLine($"  probe batches : median {probe.Timing.MedianSeconds * 1e3:F3} ms, IQR {probe.Timing.IqrSeconds * 1e3:F3} ms ({TimingStatistics.SampleCount} samples)");
 
         Benchmark<TKernel>(probe.Gflops);
+        return true;
     }
 
     private static void PrintEnvironment()
@@ -285,7 +317,7 @@ public static unsafe class Program
         return results;
     }
 
-    private static void RunParallel<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
+    private static bool RunParallel<TKernel>(bool verifyOnly) where TKernel : struct, IMicroKernel
     {
         Console.WriteLine();
         Console.WriteLine($"=== {TKernel.Name} threaded (MR={TKernel.Mr}, NR={TKernel.Nr}) ===");
@@ -293,7 +325,7 @@ public static unsafe class Program
         if (!TKernel.IsSupported)
         {
             Console.WriteLine("  not supported on this CPU, skipping");
-            return;
+            return true;
         }
 
         // Correctness once. Races and edge handling do not depend on thread count,
@@ -303,11 +335,12 @@ public static unsafe class Program
             if (!Verify((rows, columns, depth, alpha, left, leftStride, right, rightStride, beta, result, resultStride) =>
                     ParallelGemm.Multiply<TKernel>(rows, columns, depth, alpha, left, leftStride,
                         right, rightStride, beta, result, resultStride, verifyScratch),
-                    TKernel.Mr, TKernel.Nr)
-                || verifyOnly)
+                    TKernel.Mr, TKernel.Nr))
             {
-                return;
+                return false;
             }
+
+            if (verifyOnly) return true;
         }
 
         var byThreadCount = new Dictionary<int, Dictionary<int, double>>();
@@ -326,6 +359,7 @@ public static unsafe class Program
         }
 
         PrintScaling(byThreadCount);
+        return true;
     }
 
     private static int[] ThreadCounts()

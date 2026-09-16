@@ -13,4 +13,18 @@
     <TieredPGO>false</TieredPGO>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The default glob would otherwise pull the test project's sources into
+         the library. -->
+    <Compile Remove="tests/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Packing, Blas1, Blas2 and Triangular are internal: they are
+         implementation detail of the public GEMM and LU entry points, but they
+         are exactly the layers where an off-by-one hides, so they are tested
+         directly. -->
+    <InternalsVisibleTo Include="GemmLab.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Report host ISA
+        # Which micro-kernels actually get exercised depends on the runner.
+        # GitHub-hosted runners frequently lack AVX-512, in which case that
+        # kernel's tests are reported as skipped rather than silently passing.
+        run: lscpu | grep -E '^Model name|^Flags' | tr ' ' '\n' | grep -E 'avx|fma|^Model' || true
+
+      - name: Restore
+        run: dotnet restore GemmLab.slnx
+
+      - name: Build
+        run: dotnet build GemmLab.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test GemmLab.slnx -c Release --no-build --logger 'console;verbosity=normal'
+
+      - name: Verification harness
+        # The console harness covers the whole-program path that the unit tests
+        # do not: BLIS dispatch reporting, the benchmark plumbing, and the
+        # residual sweeps. It exits non-zero if any check fails.
+        run: ./bin/Release/net10.0/GemmLab --verify-only
+
+  codegen:
+    name: Micro-kernel codegen
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build GemmLab.csproj -c Release
+
+      - name: Check for accumulator spills
+        # RyuJIT's register allocator is shape-sensitive and fails silently: a
+        # kernel can spill every accumulator to the stack, costing roughly 5x,
+        # with no error and no warning. Reading the generated code is the only
+        # reliable detector, which is why it is a CI gate and not a habit.
+        run: ./disasm.sh kernel.asm
+
+      - name: Upload disassembly
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-disassembly
+          path: kernel.asm
+          if-no-files-found: warn

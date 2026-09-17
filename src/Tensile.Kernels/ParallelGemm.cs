@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Buffers and blocking parameters for <see cref="ParallelGemm"/>.
@@ -13,7 +13,7 @@ namespace Tensile.Primitives;
 /// is reading the same A block at the same time and it stays resident in each
 /// core's L2.
 /// </summary>
-public sealed unsafe class ParallelGemmScratch : IDisposable
+internal sealed unsafe class ParallelGemmScratch : IDisposable
 {
     /// <summary>Row-block size: the packed A block per MC step is sized to fit a core's share of L2.</summary>
     public int Mc { get; set; }
@@ -131,7 +131,7 @@ public sealed unsafe class ParallelGemmScratch : IDisposable
 /// runtime; if it shows up as poor scaling at small n, the fix is persistent
 /// worker threads with an explicit Barrier rather than the thread pool.
 /// </summary>
-public static unsafe class ParallelGemm
+internal static unsafe class ParallelGemm
 {
     /// <summary>C := beta*C + alpha*A*B, all column-major.</summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]

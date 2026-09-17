@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Triangular solves, column-oriented so the right-hand side is walked

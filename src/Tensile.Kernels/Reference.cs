@@ -1,10 +1,10 @@
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Unblocked reference implementation and accuracy checks. Slow on purpose:
 /// this is the oracle, not a competitor.
 /// </summary>
-public static unsafe class Reference
+internal static unsafe class Reference
 {
     /// <summary>C := beta*C + alpha*A*B, column-major, textbook loop order.</summary>
     public static void Multiply(

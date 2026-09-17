@@ -1,14 +1,14 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Reusable packing buffers. These are large (the B buffer is sized to occupy
 /// a good fraction of L3), so they are allocated once and reused rather than
 /// per call.
 /// </summary>
-public sealed unsafe class GemmScratch : IDisposable
+internal sealed unsafe class GemmScratch : IDisposable
 {
     /// <summary>Row-block size: the packed A block is Mc x Kc and is sized to fit L2.</summary>
     public int Mc { get; }
@@ -87,7 +87,7 @@ public sealed unsafe class GemmScratch : IDisposable
 /// kernel type and every TKernel.Execute call is a direct (inlinable) call,
 /// not an interface dispatch.
 /// </summary>
-public static unsafe class Gemm
+internal static unsafe class Gemm
 {
     /// <summary>C := beta*C + alpha*A*B, all column-major.</summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]

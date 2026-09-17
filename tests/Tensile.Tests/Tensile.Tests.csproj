@@ -3,6 +3,9 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+
+    <!-- The primitive-layer contracts drive the kernels with pointers, as the kernels are written. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Tensile/Tensile.csproj" />
+    <ProjectReference Include="../../src/Tensile.Kernels/Tensile.Kernels.csproj" />
   </ItemGroup>
 
   <ItemGroup>

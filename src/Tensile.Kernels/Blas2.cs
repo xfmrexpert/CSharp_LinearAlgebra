@@ -1,4 +1,4 @@
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Products of a square matrix with a narrow panel of columns.

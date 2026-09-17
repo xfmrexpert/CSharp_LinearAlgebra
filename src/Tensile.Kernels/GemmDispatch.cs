@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Owns the packing buffers for both GEMM paths and picks between them by
@@ -17,7 +17,7 @@ namespace Tensile.Primitives;
 /// because the choice changes measured behaviour, and a caller benchmarking one
 /// path should not silently get the other.
 /// </summary>
-public sealed unsafe class GemmDispatch : IDisposable
+internal sealed unsafe class GemmDispatch : IDisposable
 {
     /// <summary>
     /// Work (2*m*n*k flops) below which the serial path wins.

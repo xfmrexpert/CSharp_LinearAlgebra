@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -92,11 +92,11 @@ public readonly struct UpperTriangular : ITriangularStructure
 
     /// <inheritdoc/>
     public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveUpper(a, b);
+        KernelEntry.SolveUpper(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
     public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveUpperTransposed(a, b);
+        KernelEntry.SolveUpperTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>
@@ -120,11 +120,11 @@ public readonly struct LowerTriangular : ITriangularStructure
 
     /// <inheritdoc/>
     public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveLower(a, b);
+        KernelEntry.SolveLower(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
     public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveLowerTransposed(a, b);
+        KernelEntry.SolveLowerTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>
@@ -154,11 +154,11 @@ public readonly struct UnitLowerTriangular : ITriangularStructure
 
     /// <inheritdoc/>
     public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveLowerUnit(a, b);
+        KernelEntry.SolveLowerUnit(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
     public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        KernelEntry.SolveLowerUnitTransposed(a, b);
+        KernelEntry.SolveLowerUnitTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>

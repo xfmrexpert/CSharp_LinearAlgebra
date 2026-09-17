@@ -13,24 +13,24 @@ managed code.
 ```csharp
 using Tensile;
 
-using var a = Matrix.FromRows(new[,] { { 4.0, 1.0 }, { 1.0, 3.0 } });
-using var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
+var a = Matrix.FromRows(new[,] { { 4.0, 1.0 }, { 1.0, 3.0 } });
+var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
 
-using Matrix<double> x = a.Solve(b);
+Matrix<double> x = a.Solve(b);
 
-using LuDecomposition lu = a.FactorLu();
+LuDecomposition lu = a.FactorLu();
 double rcond = lu.ReciprocalCondition();
 ```
 
 **[Full API guide](docs/api.md)** — matrices and views, structure-typed
-dispatch, factorizations, norms, workspaces, and dropping to the primitive
-layer.
+dispatch, factorizations, norms, workspaces, and matrix-free operators.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/Tensile` | The library. `Tensile` is the ergonomic layer; `Tensile.Primitives` is the allocation-free pointer layer; `Tensile.Interop` is the optional BLIS binding. |
+| `src/Tensile` | The public assembly: compiled with unsafe code disallowed and integer overflow checking on. Matrices, views, structures, factorizations, operators. |
+| `src/Tensile.Kernels` | The kernel assembly: micro-kernels, packing, GEMM, LU, triangular solves. All `internal`, all the library's unsafe code, reached through one pinning seam. Also holds the optional BLIS binding until it gets its own package. |
 | `tests/Tensile.Tests` | xunit suite. Contracts generic over the micro-kernel run once per supported kernel. |
 | `bench/Tensile.Benchmarks` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep. |
 | `tools/Tensile.Diagnostics` | `tensile-diag`: host ISA, BLIS dispatch, estimator accuracy. Also the single process the codegen gate drives. |

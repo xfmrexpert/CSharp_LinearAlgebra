@@ -1,7 +1,7 @@
 # Tensile: secure-by-design proposal
 
-Status: **approved** — every recommendation in §11 accepted. Phases 1 and 2 of
-§10 have landed; Phase 3 is next. New functionality (Cholesky, `expm`, complex)
+Status: **approved** — every recommendation in §11 accepted. Phases 1–3 of
+§10 have landed; Phase 4 is next. New functionality (Cholesky, `expm`, complex)
 stays paused until §10 is complete.
 
 This document says what "secure" means for a dense linear algebra library,
@@ -258,26 +258,40 @@ allocation path, which is fixed by I7 and I9.
 
 ### 5.5 The pinning seam — where spans become pointers
 
-The kernel assembly (§5.6) has exactly one place that turns a view into a
-pointer, and it does so with `fixed`:
+The kernel assembly (§5.6) has exactly one place that turns a span into a
+pointer, and it does so with `fixed`. It cannot take the view types — they are
+defined in the public assembly, which references the kernel assembly and not
+the other way round — so it takes its own minimal equivalent, `Operand` /
+`Target`: a span plus rows, columns and stride, length-checked on construction.
+The public assembly repackages a view into one in a single safe method
+(`ViewOperands`) that contains no arithmetic.
 
 ```csharp
 internal static unsafe class KernelEntry
 {
-    public static void Gemm<TKernel>(ReadOnlyMatrixView<double> a, ReadOnlyMatrixView<double> b,
-                                     MatrixView<double> c, double alpha, double beta, GemmScratch scratch)
+    public static void Multiply<TKernel>(GemmDispatch dispatch, Operand a, Operand b, Target c,
+                                         double alpha, double beta)
         where TKernel : struct, IMicroKernel
     {
-        fixed (double* pa = a.Buffer)
-        fixed (double* pb = b.Buffer)
-        fixed (double* pc = c.Buffer)
+        Require(a.Columns == b.Rows, "inner dimensions");
+        Require(c.Rows == a.Rows && c.Columns == b.Columns, "destination shape");
+
+        fixed (double* pa = a.Data)
+        fixed (double* pb = b.Data)
+        fixed (double* pc = c.Data)
         {
-            Gemm.Multiply<TKernel>(a.Shape.Rows, b.Shape.Columns, a.Shape.Columns,
-                alpha, pa, a.Shape.Stride, pb, b.Shape.Stride, beta, pc, c.Shape.Stride, scratch);
+            dispatch.Multiply<TKernel>(a.Rows, b.Columns, a.Columns,
+                alpha, pa, a.Stride, pb, b.Stride, beta, pc, c.Stride);
         }
     }
 }
 ```
+
+Nothing returned from the seam holds a pointer. `LuFactorization` carries the
+pivots (a managed array) and the diagnostics; the solves take the factors back
+as an operand. That is what lets `Workspace.FactorLu` be public again: it
+factors a `Matrix<double>` in place, and the decomposition it returns shares
+that matrix's GC-owned storage rather than pointing into it.
 
 Two properties matter:
 
@@ -298,8 +312,8 @@ packing layout, asserted under `Debug` (§8, "debug assertions").
 
 | Assembly | `AllowUnsafeBlocks` | Visibility | Contents |
 |---|---|---|---|
-| `Tensile` | **false** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator` |
-| `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, Blas1/2, `normest1` core, `KernelEntry` |
+| `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator`, the `normest1` driver |
+| `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, Blas1/2, exact norms, `KernelEntry` |
 | `Tensile.Interop.Blis` | true | public, **separate package** | the BLIS binding |
 
 The reason for the split is not that a consumer cannot reference
@@ -311,6 +325,19 @@ kernel type `internal`, referencing the DLL gains a consumer nothing short of
 reflection.
 
 `Tensile.Kernels` ships inside the same NuGet package as `Tensile`.
+
+The `normest1` driver landed on the safe side of the line, not the kernel side
+the first draft of this table put it on. It is bookkeeping — sign matrices,
+column sums, a sort — over O(n·t) buffers, and every product it needs goes
+through an `ILinearOperator`, so nothing in it wants a pointer. Writing it over
+managed arrays under overflow checking cost nothing measurable and removed a
+few hundred lines of unsafe code. The O(n²·t) products it asks for are still
+the kernel assembly's.
+
+The compiler half of I4 turned out to be observable after all: the C# compiler
+marks a module containing unsafe code with `UnverifiableCodeAttribute`. The
+surface test asserts the mark is present on `Tensile.Kernels` (so the detector
+is known to fire) and absent on `Tensile`.
 
 **The "opt-in loophole" is dropped.** The legitimate advanced need — zero-copy
 against memory the caller owns — is met by `Bind` over their span (§5.3), not
@@ -471,7 +498,13 @@ red.
 3. **Split `Tensile.Kernels`.** `AllowUnsafeBlocks=false` and
    `CheckForOverflowUnderflow=true` on `Tensile`; `KernelEntry` seam;
    primitives `internal`; `ILinearOperator` re-signatured. I3, I4, I7 go
-   green; the surface reflection test lands here.
+   green; the surface reflection test lands here. *Done: 4 red → 1 (I8).
+   Three things came out differently from the sketch above, all recorded in
+   §5.5–5.6: the seam takes `Operand`/`Target` rather than views, because the
+   view types live in the assembly above it; the `normest1` driver moved up
+   into the safe assembly rather than down into the kernels; and the BLIS
+   binding is parked, internal, in the kernel assembly until Phase 4, so the
+   I8 test now checks both assemblies and stays honestly red.*
 4. **`Tensile.Interop.Blis` out to its own package.** I8 green.
 5. **Allocator and limits.** I9 green.
 6. **CI hardening**: actions pinned to SHAs, `permissions: contents: read`,

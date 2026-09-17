@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -21,9 +21,10 @@ namespace Tensile;
 /// where the lock and the shared buffers are measurement noise.
 ///
 /// The workspace itself remains disposable because its packing buffers are
-/// native memory owned by the primitive layer. That is a Phase 3 concern; the
-/// matrices it operates on are not disposable and never were a lifetime risk
-/// through this type, since it holds no reference to them between calls.
+/// native memory owned by the kernel layer; the allocator phase of the
+/// security migration revisits that. The matrices it operates on are not
+/// disposable and never were a lifetime risk through this type, since it holds
+/// no reference to them between calls.
 /// </summary>
 public sealed class Workspace : IDisposable
 {
@@ -41,11 +42,14 @@ public sealed class Workspace : IDisposable
     /// the serial path regardless, since fork/join costs more than they save.
     /// </param>
     public Workspace(bool multithreaded = true)
+        : this(Avx512Kernel16x8.IsSupported ? Kernel.Avx512 : Avx2Kernel8x6.IsSupported ? Kernel.Avx2 : Kernel.Scalar,
+            multithreaded)
     {
-        _kernel = Avx512Kernel16x8.IsSupported ? Kernel.Avx512
-            : Avx2Kernel8x6.IsSupported ? Kernel.Avx2
-            : Kernel.Scalar;
+    }
 
+    private Workspace(Kernel kernel, bool multithreaded)
+    {
+        _kernel = kernel;
         IsMultithreaded = multithreaded;
 
         _dispatch = (_kernel, multithreaded) switch
@@ -57,6 +61,22 @@ public sealed class Workspace : IDisposable
             (_, true) => GemmDispatch.Multithreaded<ScalarKernel4x4>(),
             (_, false) => GemmDispatch.Serial<ScalarKernel4x4>(),
         };
+    }
+
+    /// <summary>
+    /// A workspace on a named micro-kernel, for the kernel-generic test
+    /// contracts, which run the public operations once per kernel the host
+    /// supports. Callers check <c>TKernel.IsSupported</c> first; a workspace on
+    /// an unsupported kernel faults on first use.
+    /// </summary>
+    internal static Workspace ForKernel<TKernel>(bool multithreaded) where TKernel : struct, IMicroKernel
+    {
+        Kernel kernel = typeof(TKernel) == typeof(Avx512Kernel16x8) ? Kernel.Avx512
+            : typeof(TKernel) == typeof(Avx2Kernel8x6) ? Kernel.Avx2
+            : typeof(TKernel) == typeof(ScalarKernel4x4) ? Kernel.Scalar
+            : throw new ArgumentException($"Unknown micro-kernel {typeof(TKernel).Name}.");
+
+        return new Workspace(kernel, multithreaded);
     }
 
     /// <summary>
@@ -112,48 +132,58 @@ public sealed class Workspace : IDisposable
             switch (_kernel)
             {
                 case Kernel.Avx512:
-                    KernelEntry.Multiply<Avx512Kernel16x8>(dispatch, a, b, c, alpha, beta);
+                    KernelEntry.Multiply<Avx512Kernel16x8>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
                     break;
                 case Kernel.Avx2:
-                    KernelEntry.Multiply<Avx2Kernel8x6>(dispatch, a, b, c, alpha, beta);
+                    KernelEntry.Multiply<Avx2Kernel8x6>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
                     break;
                 default:
-                    KernelEntry.Multiply<ScalarKernel4x4>(dispatch, a, b, c, alpha, beta);
+                    KernelEntry.Multiply<ScalarKernel4x4>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
                     break;
             }
         }
     }
 
     /// <summary>
-    /// Factor <paramref name="a"/> in place as P*A = L*U. The caller's storage
-    /// is overwritten with the packed factors.
+    /// Factor <paramref name="a"/> in place as P*A = L*U, without copying.
+    /// The matrix is overwritten with the packed factors and the returned
+    /// decomposition shares its storage, so <paramref name="a"/> must not be
+    /// written afterwards while the decomposition is in use.
     ///
-    /// Internal for now: the returned <see cref="LuFactorization"/> keeps a
-    /// pointer into <paramref name="a"/>'s buffer after this returns, which is
-    /// sound only over memory that never moves. <see cref="LuDecomposition"/>
-    /// satisfies that by owning a pinned <see cref="Matrix{T}"/>; a public
-    /// caller binding an arbitrary span could not be held to it. The public
-    /// factor-in-place path returns in Phase 3, when the factorization is
-    /// re-plumbed to hold no pointer.
+    /// This is the zero-copy path; <see cref="MatrixOperations.FactorLu"/> is
+    /// the copying one and the right default. Taking a <see cref="Matrix{T}"/>
+    /// rather than a view is deliberate: the decomposition has to keep the
+    /// factors alive for as long as it exists, and a borrowed view cannot
+    /// promise that, but a matrix -- a garbage-collected object -- can.
     /// </summary>
-    /// <param name="a">The matrix to factor, overwritten with the packed factors. Must be backed by non-movable memory.</param>
-    /// <param name="blockSize">Panel width; zero selects the default.</param>
-    /// <returns>The pivot array and diagnostics, which must be disposed. It does not own the factors.</returns>
+    /// <param name="a">The square or rectangular matrix to factor. Overwritten.</param>
+    /// <param name="blockSize">Panel width; zero selects the default. The optimum shifts with size.</param>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    internal LuFactorization FactorLu(MatrixView<double> a, int blockSize = 0)
+    public LuDecomposition FactorLu(Matrix<double> a, int blockSize = 0)
     {
+        ArgumentNullException.ThrowIfNull(a);
+
+        // Captured before the factorization overwrites the matrix, so that
+        // condition estimation later cannot be given the wrong norm.
+        double oneNorm = a.OneNorm();
+
+        LuFactorization factorization;
+
         lock (_gate)
         {
             GemmDispatch dispatch = Active;
             int nb = blockSize <= 0 ? Lu.DefaultBlockSize : blockSize;
+            Target target = a.View.ToTarget();
 
-            return _kernel switch
+            factorization = _kernel switch
             {
-                Kernel.Avx512 => KernelEntry.FactorLu<Avx512Kernel16x8>(dispatch, a, nb),
-                Kernel.Avx2 => KernelEntry.FactorLu<Avx2Kernel8x6>(dispatch, a, nb),
-                _ => KernelEntry.FactorLu<ScalarKernel4x4>(dispatch, a, nb),
+                Kernel.Avx512 => KernelEntry.FactorLu<Avx512Kernel16x8>(dispatch, target, nb),
+                Kernel.Avx2 => KernelEntry.FactorLu<Avx2Kernel8x6>(dispatch, target, nb),
+                _ => KernelEntry.FactorLu<ScalarKernel4x4>(dispatch, target, nb),
             };
         }
+
+        return new LuDecomposition(a, factorization, oneNorm);
     }
 
     private GemmDispatch Active

@@ -3,17 +3,18 @@
 Dense linear algebra for .NET. Column-major, double precision, with hand-written
 micro-kernels underneath.
 
-The surface is two layers, and which one you want depends on whether allocation
-matters to you.
+Everything public is in one namespace, `Tensile`, in one assembly that is
+compiled with unsafe code disallowed and integer overflow checking on. The
+kernels — micro-kernels, packing, blocked GEMM, LU — live in a second assembly,
+`Tensile.Kernels`, whose types are all internal. There is no public pointer
+anywhere, and no supported way to reach the kernels except through the types
+below. What you give up is an O(1) shape check per call against work that is
+at minimum O(n²); what you get is that a wrong dimension is an exception rather
+than a write to someone else's memory. The reasoning is in
+`docs/security-design.md`.
 
-| Layer | Namespace | For |
-| --- | --- | --- |
-| Ergonomic | `Tensile` | Ordinary code. Allocates results, owns its memory, checks its arguments. |
-| Primitives | `Tensile.Primitives` | Inner loops. Pointers, strides, caller-supplied buffers, no validation. |
-| Interop | `Tensile.Interop` | The optional BLIS binding, used as a benchmark baseline. |
-
-Nothing in the ergonomic layer hides anything in the primitive layer: both are
-public, and dropping down is a supported move rather than an escape hatch.
+Zero-copy over your own storage is still available: bind a span to a shape and
+the library works on it in place. See *Matrices and views*.
 
 ---
 
@@ -164,10 +165,18 @@ double det    = lu.Determinant();
 ```
 
 `FactorLu` copies, so your matrix survives, and the result keeps its own
-storage alive for as long as you hold it. A zero-copy factor-in-place over
-caller-owned storage is coming with the kernel-assembly split; until then the
-copy is the only public route, and it is an O(n²) cost against an O(n³)
-factorization.
+storage alive for as long as you hold it. When the copy matters —
+it is O(n²) against an O(n³) factorization, so it rarely does — factor in
+place through a workspace:
+
+```csharp
+LuDecomposition lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
+```
+
+The decomposition then shares `a`'s storage, which is why this takes a
+`Matrix<double>` and not a view: the factors have to stay alive for as long as
+the decomposition does, and a garbage-collected object can promise that where a
+borrowed view cannot. Do not write to `a` while you are still using `lu`.
 
 Three things worth knowing:
 
@@ -237,23 +246,41 @@ rather than measured.
 
 ---
 
-## Dropping to the primitive layer
+## Matrix-free operators and norm estimation
+
+`ILinearOperator` is the extension point for anything that can be applied but
+should not be formed: a matrix power, an inverse, and later the operators
+`expm` probes. It takes and returns bound views, so an implementation receives
+the extents along with the data and cannot be handed a buffer shorter than its
+`Order` claims.
 
 ```csharp
-using Tensile.Primitives;
-
-using var dispatch = GemmDispatch.Multithreaded<Avx512Kernel16x8>();
-dispatch.Multiply<Avx512Kernel16x8>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
+public interface ILinearOperator
+{
+    int Order { get; }
+    void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);            // Y := A X
+    void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);   // Y := Aᵀ X
+}
 ```
 
-Here you choose the kernel, own the buffers, and get no argument checking. The
-micro-kernel is a struct implementing `IMicroKernel` with static abstract
-members, so the driver is monomorphised per kernel and every call is direct and
-inlinable rather than an interface dispatch.
+Two implementations ship. `DenseMatrixOperator(a, power)` applies `Aᵖ` by `p`
+successive panel products without forming the power; `LuInverseOperator(lu)`
+applies `A⁻¹` by solving. Both are what `NormEstimate` needs:
 
-`Reference.Multiply` is the naive triple loop, kept as a correctness oracle.
-Blocked GEMM sums the same products in a different order, so compare by residual
-and never by equality.
+```csharp
+double est   = NormEstimate.Of(new DenseMatrixOperator(a, power: 3)).Value;   // ≈ ‖A³‖₁
+double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator
+```
+
+`NormEstimate.Of` is Higham and Tisseur's block 1-norm estimator, the algorithm
+behind MATLAB's `normest1`. The result is always a **lower bound**, exact on
+most matrices and rarely off by more than a factor of two, and deterministic
+for a given seed. It never sees the operator's entries — only the products — so
+an operator that has no entries works as well as one that does.
+
+An implementation should check that `x.Rows` and `y.Rows` equal its order and
+that the two panels have the same width, and reject anything else as an
+argument. The estimator always satisfies both; another caller may not.
 
 ---
 

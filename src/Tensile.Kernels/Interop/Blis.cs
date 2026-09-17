@@ -12,8 +12,15 @@ namespace Tensile.Interop;
 /// against a <c>generic</c> BLIS build measures a fallback and is worthless:
 /// check <see cref="Architecture"/> and <see cref="GemmKernelImplementation"/>
 /// before quoting any ratio.
+///
+/// Parked in the kernel assembly, internal, because the public assembly no
+/// longer compiles unsafe code and this is the one path in the library that
+/// loads native code from a path read out of the environment. Phase 4 of
+/// docs/security-design.md moves it to its own opt-in package; until then the
+/// benchmarks and diagnostics reach it through InternalsVisibleTo and a
+/// consumer of the Tensile package cannot reach it at all.
 /// </summary>
-public sealed unsafe class Blis : IDisposable
+internal sealed unsafe class Blis : IDisposable
 {
     private nint _library;
     private readonly nint _gemm;

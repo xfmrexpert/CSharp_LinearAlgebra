@@ -1,21 +1,21 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Tensile;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Cache-line alignment for pinned storage.
 ///
 /// Arrays on the pinned object heap are not guaranteed to start on a 64-byte
-/// boundary, so <see cref="Matrix{T}"/> over-allocates by one cache line and
+/// boundary, so <c>Matrix&lt;T&gt;</c> over-allocates by one cache line and
 /// begins its view at the first aligned element. The kernels use unaligned load
 /// instructions and would be correct without this; it is kept because the
 /// measured results were taken with aligned operands, and changing two things
 /// at once would confound the re-measurement.
 ///
-/// This is the only place in the public assembly that reads an address, and it
-/// moves to the kernel assembly in Phase 3 so that the public assembly can
-/// compile with <c>AllowUnsafeBlocks</c> off. Reading the address is sound
+/// This is the only address read on the allocation path, and it lives here
+/// rather than beside <c>Matrix&lt;T&gt;</c> because the public assembly
+/// compiles with <c>AllowUnsafeBlocks</c> off. Reading the address is sound
 /// only because the array is pinned: a movable array's address is stale the
 /// moment the garbage collector runs.
 /// </summary>

@@ -1,4 +1,4 @@
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// Panel packing. This is the half of BLIS that nothing about the language

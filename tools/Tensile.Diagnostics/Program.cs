@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
 using Tensile;
 using Tensile.Interop;
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Diagnostics;
 

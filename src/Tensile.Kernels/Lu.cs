@@ -1,14 +1,19 @@
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
-/// Result of <see cref="Lu.Factor{TKernel}"/>. The factors overwrite the
-/// caller's matrix (L below the diagonal with an implicit unit diagonal, U on
-/// and above it); only the pivot array is owned here.
+/// Result of <see cref="Lu.Factor{TKernel}"/>: the pivot sequence and the
+/// diagnostics. The factors themselves overwrite the caller's matrix (L below
+/// the diagonal with an implicit unit diagonal, U on and above it) and are NOT
+/// referenced from here -- every solve takes them as an explicit operand.
+///
+/// Holding no pointer is what makes this safe to keep: the caller's storage
+/// may be pinned only for the duration of the factoring call, and a pointer
+/// kept past that would be dangling the moment the pin was released. The
+/// pivot array is an ordinary managed array, so there is nothing to dispose.
 /// </summary>
-public sealed unsafe class LuFactorization : IDisposable
+internal sealed class LuFactorization
 {
     /// <summary>Rows of the factored matrix.</summary>
     public int Rows { get; }
@@ -16,17 +21,11 @@ public sealed unsafe class LuFactorization : IDisposable
     /// <summary>Columns of the factored matrix.</summary>
     public int Columns { get; }
 
-    /// <summary>Column stride of the caller's buffer.</summary>
-    public int Stride { get; }
-
-    /// <summary>The caller's buffer, factored in place. Not owned.</summary>
-    public double* Factors { get; }
-
     /// <summary>
     /// Row interchanges, 0-based, length min(Rows, Columns). Entry k means row
     /// k was swapped with row Pivots[k] at step k. Applied in increasing k.
     /// </summary>
-    public int* Pivots { get; private set; }
+    public int[] Pivots { get; }
 
     /// <summary>
     /// Column index of the first exactly-zero pivot, or -1 if none. Mirrors
@@ -55,27 +54,15 @@ public sealed unsafe class LuFactorization : IDisposable
     /// <summary>Whether the factored matrix was square, and so admits a solve.</summary>
     public bool IsSquare => Rows == Columns;
 
-    internal LuFactorization(int rows, int columns, int stride, double* factors)
+    internal LuFactorization(int rows, int columns)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(columns);
+
         Rows = rows;
         Columns = columns;
-        Stride = stride;
-        Factors = factors;
-
-        int count = Math.Max(1, Math.Min(rows, columns));
-        Pivots = (int*)NativeMemory.AlignedAlloc((nuint)count * sizeof(int), 64);
-        new Span<int>(Pivots, count).Clear();
+        Pivots = new int[Math.Min(rows, columns)];
     }
-
-    /// <summary>Release the pivot array. The factors belong to the caller and are untouched.</summary>
-    public void Dispose()
-    {
-        if (Pivots is not null) { NativeMemory.AlignedFree(Pivots); Pivots = null; }
-        GC.SuppressFinalize(this);
-    }
-
-    /// <summary>Releases the pivot array if <see cref="Dispose"/> was not called.</summary>
-    ~LuFactorization() => Dispose();
 }
 
 /// <summary>
@@ -93,7 +80,7 @@ public sealed unsafe class LuFactorization : IDisposable
 /// practice, and it is what every production library uses. Check the reported
 /// residual rather than assuming.
 /// </summary>
-public static unsafe class Lu
+internal static unsafe class Lu
 {
     /// <summary>Smallest normalized double; below this, divide rather than multiply by a reciprocal.</summary>
     private const double SafeMin = 2.2250738585072014e-308;
@@ -105,15 +92,17 @@ public static unsafe class Lu
     public const int DefaultBlockSize = 64;
 
     /// <summary>
-    /// Factor the m x n column-major matrix in place as P*A = L*U.
-    /// The returned object must be disposed; it does not own the matrix.
+    /// Factor the m x n column-major matrix in place as P*A = L*U. The result
+    /// holds the pivots and diagnostics only; the factors are left in
+    /// <paramref name="a"/>, and the solves take them back as an argument.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static LuFactorization Factor<TKernel>(
         int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = DefaultBlockSize)
         where TKernel : struct, IMicroKernel
     {
-        var result = new LuFactorization(m, n, lda, a);
+        var result = new LuFactorization(m, n);
+        int[] pivots = result.Pivots;
 
         int limit = Math.Min(m, n);
         if (limit == 0) return result;
@@ -123,8 +112,8 @@ public static unsafe class Lu
         // Small problems are all panel and no GEMM; skip the blocking machinery.
         if (blockSize >= limit)
         {
-            FactorPanel(m, n, a, lda, result.Pivots, 0, result);
-            RecordPivotRange(result);
+            FactorPanel(m, n, a, lda, pivots, 0, result);
+            RecordPivotRange(result, a, lda);
             return result;
         }
 
@@ -134,17 +123,17 @@ public static unsafe class Lu
             double* panel = a + (nint)jb * lda + jb;
 
             // Factor the current panel: rows jb..m-1, columns jb..jb+width-1.
-            FactorPanel(m - jb, width, panel, lda, result.Pivots + jb, jb, result);
+            FactorPanel(m - jb, width, panel, lda, pivots.AsSpan(jb, width), jb, result);
 
             // Panel pivots are relative to the panel top; make them global.
-            for (int i = 0; i < width; i++) result.Pivots[jb + i] += jb;
+            for (int i = 0; i < width; i++) pivots[jb + i] += jb;
 
             // Apply this panel's interchanges to the columns either side of it.
-            SwapRows(a, lda, 0, jb, result.Pivots, jb, jb + width);
+            SwapRows(a, lda, 0, jb, pivots, jb, jb + width);
 
             if (jb + width >= n) continue;
 
-            SwapRows(a, lda, jb + width, n, result.Pivots, jb, jb + width);
+            SwapRows(a, lda, jb + width, n, pivots, jb, jb + width);
 
             // U12 := L11^-1 * A12.
             Triangular.SolveLowerUnit(
@@ -165,12 +154,12 @@ public static unsafe class Lu
                 1.0, a + (nint)(jb + width) * lda + (jb + width), lda);
         }
 
-        RecordPivotRange(result);
+        RecordPivotRange(result, a, lda);
         return result;
     }
 
     /// <summary>Scan U's diagonal so callers can spot a near-singular factorization.</summary>
-    private static void RecordPivotRange(LuFactorization result)
+    private static void RecordPivotRange(LuFactorization result, double* a, int lda)
     {
         int limit = Math.Min(result.Rows, result.Columns);
         if (limit == 0) return;
@@ -180,7 +169,7 @@ public static unsafe class Lu
 
         for (int j = 0; j < limit; j++)
         {
-            double value = Math.Abs(result.Factors[(nint)j * result.Stride + j]);
+            double value = Math.Abs(a[(nint)j * lda + j]);
             smallest = Math.Min(smallest, value);
             largest = Math.Max(largest, value);
         }
@@ -190,10 +179,11 @@ public static unsafe class Lu
     }
 
     /// <summary>
-    /// Solve A*X = B for an already-factored square A. B is n x nrhs,
-    /// column-major, overwritten with the solution.
+    /// Solve A*X = B for an already-factored square A. <paramref name="factors"/>
+    /// is the matrix <see cref="Factor{TKernel}"/> overwrote, with the stride
+    /// it had then; B is n x nrhs, column-major, overwritten with the solution.
     /// </summary>
-    public static void Solve(LuFactorization lu, int nrhs, double* b, int ldb)
+    public static void Solve(LuFactorization lu, double* factors, int lda, int nrhs, double* b, int ldb)
     {
         if (!lu.IsSquare)
             throw new ArgumentException("Solve requires a square factorization.", nameof(lu));
@@ -206,8 +196,8 @@ public static unsafe class Lu
 
         // P*b, then forward substitution, then back substitution.
         SwapRows(b, ldb, 0, nrhs, lu.Pivots, 0, n);
-        Triangular.SolveLowerUnit(n, nrhs, lu.Factors, lu.Stride, b, ldb);
-        Triangular.SolveUpper(n, nrhs, lu.Factors, lu.Stride, b, ldb);
+        Triangular.SolveLowerUnit(n, nrhs, factors, lda, b, ldb);
+        Triangular.SolveUpper(n, nrhs, factors, lda, b, ldb);
     }
 
     /// <summary>
@@ -221,7 +211,7 @@ public static unsafe class Lu
     /// Needed by the 1-norm condition estimator, which alternates products with
     /// A^-1 and A^-T.
     /// </summary>
-    public static void SolveTransposed(LuFactorization lu, int nrhs, double* b, int ldb)
+    public static void SolveTransposed(LuFactorization lu, double* factors, int lda, int nrhs, double* b, int ldb)
     {
         if (!lu.IsSquare)
             throw new ArgumentException("SolveTransposed requires a square factorization.", nameof(lu));
@@ -232,8 +222,8 @@ public static unsafe class Lu
         int n = lu.Rows;
         if (n == 0 || nrhs == 0) return;
 
-        Triangular.SolveUpperTransposed(n, nrhs, lu.Factors, lu.Stride, b, ldb);
-        Triangular.SolveLowerUnitTransposed(n, nrhs, lu.Factors, lu.Stride, b, ldb);
+        Triangular.SolveUpperTransposed(n, nrhs, factors, lda, b, ldb);
+        Triangular.SolveLowerUnitTransposed(n, nrhs, factors, lda, b, ldb);
         UnswapRows(b, ldb, 0, nrhs, lu.Pivots, 0, n);
     }
 
@@ -242,7 +232,7 @@ public static unsafe class Lu
     /// Pivots are written relative to the panel's own first row.
     /// </summary>
     private static void FactorPanel(
-        int m, int n, double* a, int lda, int* pivots, int columnOffset, LuFactorization result)
+        int m, int n, double* a, int lda, Span<int> pivots, int columnOffset, LuFactorization result)
     {
         int limit = Math.Min(m, n);
 
@@ -288,7 +278,7 @@ public static unsafe class Lu
     /// of a column-major matrix, in increasing pivot order (LAPACK's dlaswp).
     /// </summary>
     internal static void SwapRows(
-        double* a, int lda, int columnStart, int columnEnd, int* pivots, int first, int last)
+        double* a, int lda, int columnStart, int columnEnd, ReadOnlySpan<int> pivots, int first, int last)
     {
         // Column-outer, pivot-inner. The transposed order re-streams the whole
         // column range once per interchange; measured at 21% of LU runtime at
@@ -323,7 +313,7 @@ public static unsafe class Lu
     /// Verification only.
     /// </summary>
     internal static void UnswapRows(
-        double* a, int lda, int columnStart, int columnEnd, int* pivots, int first, int last)
+        double* a, int lda, int columnStart, int columnEnd, ReadOnlySpan<int> pivots, int first, int last)
     {
         for (int j = columnStart; j < columnEnd; j++)
         {

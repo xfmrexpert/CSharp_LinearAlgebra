@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 
-namespace Tensile.Primitives;
+namespace Tensile.Kernels;
 
 /// <summary>
 /// A BLIS-style micro-kernel. Computes, for a single MR x NR tile of C:
@@ -16,7 +16,7 @@ namespace Tensile.Primitives;
 /// Implementations are structs so the JIT monomorphises the driver and
 /// devirtualises every call here.
 /// </summary>
-public interface IMicroKernel
+internal interface IMicroKernel
 {
     /// <summary>Rows of the C tile. Must be a multiple of the vector width.</summary>
     static abstract int Mr { get; }
@@ -54,7 +54,7 @@ public interface IMicroKernel
 /// spills any of c00..c17 to the stack inside the k-loop, performance collapses
 /// and the disassembly will show rsp-relative vmovupd stores in the loop body.
 /// </summary>
-public readonly struct Avx512Kernel16x8 : IMicroKernel
+internal readonly struct Avx512Kernel16x8 : IMicroKernel
 {
     /// <inheritdoc/>
     public static int Mr => 16;
@@ -146,7 +146,7 @@ public readonly struct Avx512Kernel16x8 : IMicroKernel
 /// AVX2 + FMA kernel, MR=8 NR=6. The classic Haswell dgemm geometry:
 /// 12 ymm accumulators, 2 for A, 1 for the B broadcast = 15 of 16.
 /// </summary>
-public readonly struct Avx2Kernel8x6 : IMicroKernel
+internal readonly struct Avx2Kernel8x6 : IMicroKernel
 {
     /// <inheritdoc/>
     public static int Mr => 8;
@@ -226,7 +226,7 @@ public readonly struct Avx2Kernel8x6 : IMicroKernel
 /// Portable scalar kernel, MR=4 NR=4. Correctness fallback and a sanity
 /// baseline showing what the packing and blocking alone buy you.
 /// </summary>
-public readonly struct ScalarKernel4x4 : IMicroKernel
+internal readonly struct ScalarKernel4x4 : IMicroKernel
 {
     /// <inheritdoc/>
     public static int Mr => 4;

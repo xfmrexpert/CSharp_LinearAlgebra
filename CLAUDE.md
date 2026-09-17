@@ -46,31 +46,45 @@ extensions on the closed `Matrix<double>`, so adding a type is additive.
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
 carry a `Span<T>`, so the runtime is the last line of defence on every slice.
-See `docs/security-design.md`; Phases 1–2 of it have landed.
+The public assembly compiles with `AllowUnsafeBlocks=false` and
+`CheckForOverflowUnderflow=true`; every pointer lives in a second assembly,
+`Tensile.Kernels`, whose types are all `internal`. See
+`docs/security-design.md`; Phases 1–3 of it have landed.
 
 The three-layer architecture this file has described from the start now
-exists in full:
+exists in full, as two assemblies:
 
-| Layer | Namespace | Holds |
+| Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations |
-| Primitives | `Tensile.Primitives` | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, Blas1/2, normest1 |
-| Interop | `Tensile.Interop` | The optional BLIS binding |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate` |
+| Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, Blas1/2, exact norms, the `KernelEntry` seam |
+| Interop | `Tensile.Interop` (parked in the kernel assembly, internal) | The optional BLIS binding; Phase 4 gives it its own package |
+
+The kernel assembly is reached only through `KernelEntry`, which takes
+`Operand`/`Target` (a span plus rows, columns, stride) and pins with `fixed`
+for exactly one call. Nothing it returns holds a pointer: `LuFactorization`
+carries pivots and diagnostics only, and the solves take the factors back as an
+operand. The project's own tests, benchmarks and diagnostics see the internals
+through `InternalsVisibleTo`; a consumer of the package cannot.
 
 | Path | Purpose |
 | --- | --- |
 | `src/Tensile/Matrix.cs` | Owning storage on the pinned object heap, 64-byte aligned, not disposable; plus the creation factories |
 | `src/Tensile/MatrixShape.cs` | Self-validating shape value; all extent/offset arithmetic, checked in `long` |
 | `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`: `Span`-backed ref structs, obtained only by `Bind` or slicing; no pointer constructor |
-| `src/Tensile/Alignment.cs` | Cache-line offset for pinned arrays; the one address read in the public assembly (moves to Kernels in Phase 3) |
-| `src/Tensile/Primitives/KernelEntry.cs` | The single seam where views are pinned and become pointers |
+| `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
+| `src/Tensile/LinearOperators.cs` | `ILinearOperator` over views (the public extension point), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
+| `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
 | `src/Tensile/LuDecomposition.cs` | Owning factorization; captures ||A||_1 before overwriting A |
 | `src/Tensile/MatrixOperations.cs` | Fluent extensions on `Matrix<double>` and the structured solves |
-| `src/Tensile/Primitives/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, NormEstimate, LinearOperators, Reference |
-| `src/Tensile/Interop/Blis.cs` | Native `bli_dgemm` binding + dispatch/ABI queries |
-| `tests/Tensile.Tests/` | xunit.v3, 799 tests; `Invariants/` is the secure-by-design spec (4 still red, closed by Phases 3–4) |
+| `src/Tensile.Kernels/KernelEntry.cs` | The single seam where spans are pinned and become pointers; restates every shape precondition |
+| `src/Tensile.Kernels/Operand.cs` | `Operand` / `Target`: span + shape, length-checked on construction |
+| `src/Tensile.Kernels/Alignment.cs` | Cache-line offset for pinned arrays; the one address read on the allocation path |
+| `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
+| `src/Tensile.Kernels/Interop/Blis.cs` | Native `bli_dgemm` binding + dispatch/ABI queries; internal, pending Phase 4 |
+| `tests/Tensile.Tests/` | xunit.v3, 807 tests; `Invariants/` is the secure-by-design spec (1 still red: I8, closed by Phase 4); kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |

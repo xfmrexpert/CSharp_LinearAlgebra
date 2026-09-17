@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 
@@ -398,6 +398,34 @@ public unsafe class MatrixApiTests
         }
     }
 
+    /// <summary>
+    /// The zero-copy path: factoring through a workspace overwrites the
+    /// operand, the decomposition shares its storage, and it solves exactly as
+    /// the copying path does.
+    /// </summary>
+    [Fact]
+    public void WorkspaceFactorsInPlaceAndSharesStorage()
+    {
+        const int n = 24;
+
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 31);
+        Matrix<double> b = RandomMatrix(n, 2, seed: 32);
+        Matrix<double> expected = a.FactorLu().Solve(b);
+
+        Matrix<double> original = a.Clone();
+        LuDecomposition lu = Workspace.Shared.FactorLu(a);
+
+        // a now holds the packed factors, not the original.
+        Assert.True(MaxDifference(a, original) > 1e-3);
+        Assert.Equal(lu.Upper.View[0, 0], a[0, 0]);
+
+        Assert.True(MaxDifference(lu.Solve(b), expected) < Tolerance);
+    }
+
+    [Fact]
+    public void WorkspaceFactorLuRejectsNull() =>
+        Assert.Throws<ArgumentNullException>(() => Workspace.Shared.FactorLu(null!));
+
     // ---- structure-typed dispatch -----------------------------------------
 
     /// <summary>
@@ -419,10 +447,9 @@ public unsafe class MatrixApiTests
         // P*b, then forward substitution through L, then back substitution
         // through U -- each dispatched by its structure type.
         Matrix<double> x = b.Clone();
-        fixed (int* pivots = lu.Pivots.ToArray())
         fixed (double* px = x.View.Buffer)
         {
-            Lu.SwapRows(px, x.Stride, 0, x.Columns, pivots, 0, n);
+            Lu.SwapRows(px, x.Stride, 0, x.Columns, lu.Pivots, 0, n);
         }
 
         lu.Lower.SolveInPlace(x.View);

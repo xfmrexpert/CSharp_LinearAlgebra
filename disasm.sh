@@ -63,12 +63,12 @@ FAILED=0
 
 printf '%-30s %8s %8s\n' "kernel" "FMAs" "spills"
 
-for listing in "$WORK"/Tensile.Primitives.*Kernel*Execute.txt; do
+for listing in "$WORK"/Tensile.Kernels.*Kernel*Execute.txt; do
     [[ -e "$listing" ]] || continue
 
     FOUND=$((FOUND + 1))
     name="$(basename "$listing" .txt)"
-    name="${name#Tensile.Primitives.}"
+    name="${name#Tensile.Kernels.}"
 
     fmas=$(grep -c "vfmadd" "$listing" || true)
     spills=$(grep -cE "$SPILL_PATTERN" "$listing" || true)

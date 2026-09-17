@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Tensile/Tensile.csproj" />
+    <Project Path="src/Tensile.Kernels/Tensile.Kernels.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Tensile.Tests/Tensile.Tests.csproj" />

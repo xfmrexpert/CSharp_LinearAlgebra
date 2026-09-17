@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 
@@ -9,8 +9,11 @@ namespace Tensile.Tests;
 /// than element-wise equality: blocked GEMM sums the same products in a
 /// different order, so the answers legitimately differ in the last bits.
 /// </summary>
-public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicroKernel
+public abstract unsafe class GemmContract<TCase> where TCase : struct, IKernelCase
 {
+    /// <summary>The kernel this instantiation of the contract runs against.</summary>
+    internal static readonly KernelDriver Kernel = KernelDriver.For<TCase>();
+
     /// <summary>
     /// Generous next to the few-ulps-times-sqrt(k) a correct blocked GEMM
     /// produces, but far below anything a real indexing bug would survive.
@@ -18,7 +21,7 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     private const double Tolerance = 1e-13;
 
     protected GemmContract() =>
-        Assert.SkipUnless(TKernel.IsSupported, $"{TKernel.Name} is not supported on this CPU");
+        Assert.SkipUnless(Kernel.IsSupported, $"{Kernel.Name} is not supported on this CPU");
 
     /// <summary>
     /// Shapes chosen to straddle MR and NR in every combination: exact
@@ -89,8 +92,8 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
 
         c.FillAll(double.NaN);
 
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        gemm.MultiplySerial<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 0.0, c.Data, c.Stride);
+        using var gemm = Kernel.Serial();
+        Kernel.MultiplySerial(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 0.0, c.Data, c.Stride);
 
         for (int j = 0; j < n; j++)
             for (int i = 0; i < m; i++)
@@ -113,8 +116,8 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
         const double Sentinel = -12345.5;
         c.FillAll(Sentinel);
 
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
-        gemm.Multiply<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 0.0, c.Data, c.Stride);
+        using var gemm = Kernel.Multithreaded();
+        Kernel.Multiply(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 0.0, c.Data, c.Stride);
 
         for (int j = 0; j < n; j++)
             for (int i = m; i < c.Stride; i++)
@@ -139,11 +142,11 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
             using var viaDispatch = new TestMatrix(m, n);
             using var viaSerial = new TestMatrix(m, n);
 
-            using var gemm = GemmDispatch.Multithreaded<TKernel>();
+            using var gemm = Kernel.Multithreaded();
 
-            gemm.Multiply<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+            Kernel.Multiply(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
                 0.0, viaDispatch.Data, viaDispatch.Stride);
-            gemm.MultiplySerial<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+            Kernel.MultiplySerial(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
                 0.0, viaSerial.Data, viaSerial.Stride);
 
             double residual = Reference.RelativeResidual(
@@ -164,10 +167,10 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
         using var b = TestMatrix.Random(Math.Max(k, 1), Math.Max(n, 1), seed: 8);
         using var c = new TestMatrix(Math.Max(m, 1), Math.Max(n, 1));
 
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
+        using var gemm = Kernel.Multithreaded();
 
-        gemm.Multiply<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
-        gemm.MultiplySerial<TKernel>(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
+        Kernel.Multiply(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
+        Kernel.MultiplySerial(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
     }
 
     private enum Path { Serial, Parallel }
@@ -186,18 +189,17 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
         Reference.Multiply(m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,
             beta, expected.Data, expected.Stride);
 
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
+        using var gemm = Kernel.Multithreaded();
 
         if (path == Path.Serial)
         {
-            gemm.MultiplySerial<TKernel>(m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,
+            Kernel.MultiplySerial(gemm, m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,
                 beta, c.Data, c.Stride);
         }
         else
         {
-            using var parallel = ParallelGemmScratch.For<TKernel>();
-            ParallelGemm.Multiply<TKernel>(m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,
-                beta, c.Data, c.Stride, parallel);
+            Kernel.MultiplyParallel(m, n, k, alpha, a.Data, a.Stride, b.Data, b.Stride,
+                beta, c.Data, c.Stride);
         }
 
         double residual = Reference.RelativeResidual(
@@ -209,6 +211,6 @@ public abstract unsafe class GemmContract<TKernel> where TKernel : struct, IMicr
     }
 }
 
-public sealed class ScalarGemmTests : GemmContract<ScalarKernel4x4>;
-public sealed class Avx2GemmTests : GemmContract<Avx2Kernel8x6>;
-public sealed class Avx512GemmTests : GemmContract<Avx512Kernel16x8>;
+public sealed class ScalarGemmTests : GemmContract<ScalarCase>;
+public sealed class Avx2GemmTests : GemmContract<Avx2Case>;
+public sealed class Avx512GemmTests : GemmContract<Avx512Case>;

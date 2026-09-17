@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -16,8 +16,9 @@ namespace Tensile;
 /// <c>Matrix&lt;T&gt;</c>, so adding a numeric type later adds overloads
 /// without changing any signature here.
 ///
-/// No method here touches a pointer. Anything that needs one goes through
-/// <see cref="KernelEntry"/>, which pins a view for exactly the duration of a
+/// No method here touches a pointer, and none could: this assembly compiles
+/// with unsafe code disallowed. Anything that needs one hands a view to the
+/// kernel assembly's entry seam, which pins it for exactly the duration of a
 /// call.
 /// </summary>
 public static class MatrixOperations
@@ -73,19 +74,9 @@ public static class MatrixOperations
     {
         ArgumentNullException.ThrowIfNull(a);
 
-        Workspace active = workspace ?? Workspace.Shared;
-
-        // Captured before the factorization overwrites the matrix, so that
-        // condition estimation later cannot be given the wrong norm.
-        double oneNorm = a.OneNorm();
-
-        // The copy is a Matrix, so its storage is pinned for its lifetime --
-        // which is what makes it sound for the factorization to keep a pointer
-        // into it. See Workspace.FactorLu.
-        Matrix<double> factors = a.Clone();
-        LuFactorization factorization = active.FactorLu(factors.View, blockSize);
-
-        return new LuDecomposition(factors, factorization, oneNorm);
+        // The copy is what keeps the caller's matrix intact; the in-place path
+        // is Workspace.FactorLu, for a caller who has measured the copy.
+        return (workspace ?? Workspace.Shared).FactorLu(a.Clone(), blockSize);
     }
 
     /// <summary>
@@ -114,38 +105,38 @@ public static class MatrixOperations
 
     /// <summary>||A||_1, the largest absolute column sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static double OneNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.OneNorm(a);
+    public static double OneNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.OneNorm(a.ToOperand());
 
     /// <summary>||A||_1, the largest absolute column sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double OneNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return KernelEntry.OneNorm(a.ReadOnlyView);
+        return KernelEntry.OneNorm(a.ReadOnlyView.ToOperand());
     }
 
     /// <summary>||A||_inf, the largest absolute row sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static double InfinityNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.InfinityNorm(a);
+    public static double InfinityNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.InfinityNorm(a.ToOperand());
 
     /// <summary>||A||_inf, the largest absolute row sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double InfinityNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return KernelEntry.InfinityNorm(a.ReadOnlyView);
+        return KernelEntry.InfinityNorm(a.ReadOnlyView.ToOperand());
     }
 
     /// <summary>||A||_F, the square root of the sum of squares. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static double FrobeniusNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.FrobeniusNorm(a);
+    public static double FrobeniusNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.FrobeniusNorm(a.ToOperand());
 
     /// <summary>||A||_F, the square root of the sum of squares. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double FrobeniusNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return KernelEntry.FrobeniusNorm(a.ReadOnlyView);
+        return KernelEntry.FrobeniusNorm(a.ReadOnlyView.ToOperand());
     }
 
     /// <summary>
@@ -166,6 +157,7 @@ public static class MatrixOperations
     /// <param name="power">How many times to apply A. At least 1.</param>
     /// <param name="columns">Probe columns; more costs more products and estimates better.</param>
     /// <exception cref="ArgumentException">The matrix is not square.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The power is less than 1.</exception>
     public static double EstimateOneNorm(this Matrix<double> a, int power = 1, int columns = NormEstimate.DefaultColumns)
     {
         ArgumentNullException.ThrowIfNull(a);
@@ -173,7 +165,7 @@ public static class MatrixOperations
         if (!a.IsSquare)
             throw new ArgumentException($"Norm estimation requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
 
-        return KernelEntry.EstimateOneNorm(a.ReadOnlyView, power, columns).Value;
+        return NormEstimate.Of(new DenseMatrixOperator(a, power), columns).Value;
     }
 }
 

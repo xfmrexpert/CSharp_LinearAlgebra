@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Benchmarks;
 

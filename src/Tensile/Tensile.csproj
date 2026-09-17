@@ -8,6 +8,15 @@
          a build error, which is the only reliable way to keep it that way. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
+    <!-- The two compiler-held invariants (docs/security-design.md, I4 and I7).
+         No unsafe code in the public assembly: every pointer lives in
+         Tensile.Kernels, behind the KernelEntry seam. And every integer
+         operation here is checked, so a size or offset that would wrap throws
+         instead of addressing the wrong memory. Sizes are computed in long
+         and range-checked before they get here; this is the net under that. -->
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
+
     <Optimize>true</Optimize>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <!-- Keep JIT inlining decisions from shifting between tiers while measuring. -->
@@ -19,12 +28,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Packing, Blas1, Blas2 and Triangular are implementation detail of the
-         public surface, and are exactly where an off-by-one hides, so they are
-         tested directly rather than only through their callers. -->
+    <ProjectReference Include="../Tensile.Kernels/Tensile.Kernels.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The tests reach internal members such as the view buffers and the
+         per-kernel workspace factory, so kernel-generic contracts can drive
+         the public types through a chosen micro-kernel. -->
     <InternalsVisibleTo Include="Tensile.Tests" />
     <InternalsVisibleTo Include="Tensile.Benchmarks" />
-    <InternalsVisibleTo Include="Tensile.Diagnostics" />
+    <InternalsVisibleTo Include="tensile-diag" />
   </ItemGroup>
 
 </Project>

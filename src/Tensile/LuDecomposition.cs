@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -11,9 +11,8 @@ namespace Tensile;
 ///
 /// The factors live in a <see cref="Matrix{T}"/>, whose storage is pinned for
 /// its lifetime and reclaimed by the garbage collector when the last reference
-/// goes. There is nothing to dispose. The pivot array below it is still native
-/// memory owned by the primitive layer and freed by its finalizer; that is a
-/// Phase 3 concern and does not affect the factors' lifetime.
+/// goes, and the pivots in an ordinary array. Nothing here holds a pointer and
+/// there is nothing to dispose.
 ///
 /// <see cref="Lower"/> and <see cref="Upper"/> are views onto the same packed
 /// storage, in LAPACK's layout: L below the diagonal with an implicit unit
@@ -69,8 +68,7 @@ public sealed class LuDecomposition
     /// Row interchanges, zero-based. Entry k means row k was swapped with row
     /// <c>Pivots[k]</c> at step k, applied in increasing k.
     /// </summary>
-    public unsafe ReadOnlySpan<int> Pivots =>
-        new(_factorization.Pivots, Math.Min(Rows, Columns));
+    public ReadOnlySpan<int> Pivots => _factorization.Pivots;
 
     /// <summary>
     /// The unit lower triangular factor, as a view onto the packed storage. Its
@@ -97,7 +95,7 @@ public sealed class LuDecomposition
     public void SolveInPlace(MatrixView<double> b)
     {
         RequireSolvable(b.Rows);
-        KernelEntry.SolveLu(_factorization, b);
+        KernelEntry.SolveLu(_factorization, _factors.ReadOnlyView.ToOperand(), b.ToTarget());
     }
 
     /// <summary>Solve A^T*X = B, returning a fresh X.</summary>
@@ -116,7 +114,7 @@ public sealed class LuDecomposition
     public void SolveTransposedInPlace(MatrixView<double> b)
     {
         RequireSolvable(b.Rows);
-        KernelEntry.SolveLuTransposed(_factorization, b);
+        KernelEntry.SolveLuTransposed(_factorization, _factors.ReadOnlyView.ToOperand(), b.ToTarget());
     }
 
     /// <summary>
@@ -139,7 +137,7 @@ public sealed class LuDecomposition
         if (!IsSquare)
             throw new InvalidOperationException("Condition estimation requires a square factorization.");
 
-        return Condition.ReciprocalOne(_oneNorm, _factorization, columns);
+        return Condition.ReciprocalOne(_oneNorm, this, columns);
     }
 
     /// <summary>

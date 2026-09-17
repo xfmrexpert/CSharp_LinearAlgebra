@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 

@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security;
+using Tensile.Kernels;
 
 namespace Tensile.Tests.Invariants;
 
@@ -13,13 +15,23 @@ namespace Tensile.Tests.Invariants;
 /// bugs. Putting the guarantee in the unit suite means the surface cannot
 /// drift without a red test saying so.
 ///
-/// Pins I3 (no public pointers), I8 (no native loading in the core), the
-/// visibility half of I4 (primitives internal), and the design decision that
-/// implements I6 (no disposal to race against).
+/// Pins I3 (no public pointers), I8 (no native loading in the core), both
+/// halves of I4 (kernels internal, and no unsafe code compiled into the public
+/// assembly), and the design decision that implements I6 (no disposal to race
+/// against).
+///
+/// "The core" means what a consumer of the Tensile package receives: the
+/// public assembly and the kernel assembly that ships beside it. A guarantee
+/// about native loading that held for one of the two would not be a guarantee
+/// about the package.
 /// </summary>
 public class SurfaceInvariantTests
 {
     private static readonly Assembly Core = typeof(Matrix).Assembly;
+    private static readonly Assembly Kernels = typeof(KernelEntry).Assembly;
+
+    /// <summary>Every assembly in the package, for the invariants that are about the package.</summary>
+    public static TheoryData<Assembly> Package => new() { Core, Kernels };
 
     /// <summary>
     /// I3: no public type or member accepts, stores or returns a raw pointer.
@@ -51,8 +63,7 @@ public class SurfaceInvariantTests
 
         Assert.True(
             offenders.Count == 0,
-            "[I3] public members with pointer types (closed by Phase 3, when the primitives go internal "
-            + "and views bind spans):\n  " + string.Join("\n  ", offenders));
+            "[I3] public members with pointer types:\n  " + string.Join("\n  ", offenders));
     }
 
     /// <summary>
@@ -64,57 +75,79 @@ public class SurfaceInvariantTests
     [Fact]
     public void LinearOperatorContractHasNoPointers()
     {
-        Type? contract = Core.GetType("Tensile.Primitives.ILinearOperator") ?? Core.GetType("Tensile.ILinearOperator");
+        Type contract = typeof(ILinearOperator);
 
-        Assert.True(contract is not null, "ILinearOperator should exist somewhere in the core assembly.");
-
-        var offenders = contract!.GetMethods()
+        var offenders = contract.GetMethods()
             .Where(m => TypesInvolvedIn(m).Any(IsPointerLike))
             .Select(m => m.Name)
             .ToList();
 
         Assert.True(
             offenders.Count == 0,
-            "[I3] ILinearOperator members taking pointers (closed by Phase 3, re-signatured over views): "
-            + string.Join(", ", offenders));
+            "[I3] ILinearOperator members taking pointers: " + string.Join(", ", offenders));
     }
 
     /// <summary>
     /// I4, visibility half: the unvalidated layer is not part of the public
-    /// API. The compiler half (no unsafe code in this assembly at all) cannot
-    /// be observed by reflection and is held by AllowUnsafeBlocks=false.
+    /// API. The kernel assembly exports nothing at all, so referencing it
+    /// directly gains a consumer nothing short of reflection.
     /// </summary>
     [Fact]
-    public void PrimitivesNamespaceHasNoPublicTypes()
+    public void KernelAssemblyExportsNoTypes()
     {
-        var exposed = Core.GetExportedTypes()
-            .Where(t => t.Namespace == "Tensile.Primitives")
-            .Select(t => t.Name)
+        var exposed = Kernels.GetExportedTypes()
+            .Select(t => t.FullName)
             .OrderBy(n => n)
             .ToList();
 
         Assert.True(
             exposed.Count == 0,
-            "[I4] public types in Tensile.Primitives (closed by Phase 3, when they move to Tensile.Kernels as internal): "
-            + string.Join(", ", exposed));
+            "[I4] public types in Tensile.Kernels: " + string.Join(", ", exposed));
     }
 
     /// <summary>
-    /// I8: the core assembly loads no native code. The BLIS binding, which
-    /// dlopens a path read from an environment variable, ships in a separate
-    /// opt-in package, so a consumer who never asked for it never carries it.
+    /// I4, compiler half. AllowUnsafeBlocks=false is a build setting and not
+    /// observable as such, but its consequence is: the C# compiler stamps a
+    /// module that contains unsafe code with <see cref="UnverifiableCodeAttribute"/>,
+    /// and the kernel assembly carries it. The public assembly must not. This
+    /// test would go red if the flag were flipped and a single unsafe block
+    /// added, which is exactly the regression review would miss.
     /// </summary>
     [Fact]
-    public void InteropIsNotInTheCoreAssembly()
+    public void CoreCompiledNoUnsafeCode()
     {
-        var present = Core.GetTypes()
+        // The detector is trusted only because it fires on the assembly that
+        // is known to contain unsafe code; a detector that fired on neither
+        // would prove nothing.
+        Assert.True(
+            Kernels.ManifestModule.IsDefined(typeof(UnverifiableCodeAttribute), inherit: false),
+            "The kernel assembly should be marked unverifiable; if the compiler stopped emitting the mark, this test is blind.");
+
+        Assert.False(
+            Core.ManifestModule.IsDefined(typeof(UnverifiableCodeAttribute), inherit: false),
+            "[I4] the public assembly contains unsafe code.");
+    }
+
+    /// <summary>
+    /// I8: the package loads no native code. The BLIS binding, which dlopens a
+    /// path read from an environment variable, ships in a separate opt-in
+    /// package, so a consumer who never asked for it never carries it. Checked
+    /// on both assemblies: the binding is currently parked, internal, in the
+    /// kernel assembly, which still ships in the package, so this stays red
+    /// until Phase 4 gives it a package of its own.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Package))]
+    public void InteropIsNotInThePackage(Assembly assembly)
+    {
+        var present = assembly.GetTypes()
             .Where(t => t.Namespace is not null && t.Namespace.StartsWith("Tensile.Interop", StringComparison.Ordinal))
             .Select(t => t.FullName)
             .ToList();
 
         Assert.True(
             present.Count == 0,
-            "[I8] interop types in the core assembly (closed by Phase 4, separate Tensile.Interop.Blis package): "
+            $"[I8] interop types in {assembly.GetName().Name} (closed by Phase 4, separate Tensile.Interop.Blis package): "
             + string.Join(", ", present));
     }
 
@@ -123,19 +156,22 @@ public class SurfaceInvariantTests
     /// NativeLibrary and function pointers rather than DllImport -- and kept as
     /// a guard so the route cannot be reopened.
     /// </summary>
-    [Fact]
-    public void CoreDeclaresNoPInvoke()
+    [Theory]
+    [MemberData(nameof(Package))]
+    public void PackageDeclaresNoPInvoke(Assembly assembly)
     {
         const BindingFlags All =
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
-        var imports = Core.GetTypes()
+        var imports = assembly.GetTypes()
             .SelectMany(t => t.GetMethods(All))
             .Where(m => m.GetCustomAttribute<DllImportAttribute>() is not null)
             .Select(m => $"{m.DeclaringType?.FullName}.{m.Name}")
             .ToList();
 
-        Assert.True(imports.Count == 0, "[I8] DllImport in the core assembly: " + string.Join(", ", imports));
+        Assert.True(
+            imports.Count == 0,
+            $"[I8] DllImport in {assembly.GetName().Name}: " + string.Join(", ", imports));
     }
 
     /// <summary>

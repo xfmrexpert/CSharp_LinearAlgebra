@@ -61,8 +61,9 @@ public class LuBenchmarks : IDisposable
     {
         _original!.View.CopyTo(_work!.View);
 
-        using Tensile.Primitives.LuFactorization factorization =
-            _workspace!.FactorLu(_work.View, BlockSize);
+        // The decomposition shares _work's storage and is dropped immediately;
+        // nothing is copied and nothing needs disposing.
+        _ = _workspace!.FactorLu(_work, BlockSize);
     }
 
     /// <summary>Release the operands and workspace.</summary>

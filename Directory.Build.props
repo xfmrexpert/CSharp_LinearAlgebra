@@ -11,7 +11,12 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Off by default. The kernel assembly, and the test, benchmark and
+         diagnostics projects that drive it directly, turn it on themselves.
+         The public assembly never does: that is invariant I4 in
+         docs/security-design.md, and it is held by the compiler rather than
+         by review. -->
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 

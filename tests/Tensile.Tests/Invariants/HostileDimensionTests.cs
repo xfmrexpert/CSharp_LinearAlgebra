@@ -1,5 +1,3 @@
-using Tensile.Primitives;
-
 namespace Tensile.Tests.Invariants;
 
 /// <summary>
@@ -139,9 +137,9 @@ public class HostileDimensionTests
     }
 
     /// <summary>
-    /// The audit finding. The estimator computes its probe panel as
-    /// <c>n * t</c> in unchecked int. With <c>n = t = 50000</c> that wraps
-    /// negative, sign-extends to a 14-exabyte allocation, and surfaces as
+    /// The audit finding. The estimator once computed its probe panel as
+    /// <c>n * t</c> in unchecked int. With <c>n = t = 50000</c> that wrapped
+    /// negative, sign-extended to a 14-exabyte allocation, and surfaced as
     /// OutOfMemoryException -- the wrong diagnosis for what is an invalid
     /// request (a 2.5e9-element panel does not fit int) and must be rejected
     /// as an argument.
@@ -155,10 +153,12 @@ public class HostileDimensionTests
     ///
     /// Reachable through the public extension point: an ILinearOperator is
     /// free to report any Order, and a matrix-free operator has no storage
-    /// whose size would constrain it.
+    /// whose size would constrain it. Since Phase 3 the operator receives
+    /// bound views, so the reverse direction -- an operator writing past a
+    /// panel -- is closed by the view's own bounds.
     /// </summary>
     [Fact]
-    public unsafe void NormEstimateRejectsAProbePanelWhoseSizeOverflows()
+    public void NormEstimateRejectsAProbePanelWhoseSizeOverflows()
     {
         var op = new HostileOrderOperator(order: 50_000);
 
@@ -188,14 +188,14 @@ public class HostileDimensionTests
     /// contrived attacker: it is the shape of every matrix-free operator, and
     /// the reason the estimator cannot trust Order alone.
     /// </summary>
-    private sealed unsafe class HostileOrderOperator(int order) : ILinearOperator
+    private sealed class HostileOrderOperator(int order) : ILinearOperator
     {
         public int Order => order;
 
-        public void Apply(int t, double* x, int ldx, double* y, int ldy) =>
+        public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y) =>
             throw new InvalidOperationException("Apply must not be reached: validation should have rejected the panel size.");
 
-        public void ApplyTranspose(int t, double* x, int ldx, double* y, int ldy) =>
+        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y) =>
             throw new InvalidOperationException("ApplyTranspose must not be reached.");
     }
 }

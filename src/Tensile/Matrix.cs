@@ -1,4 +1,5 @@
 using System.Numerics;
+using Tensile.Kernels;
 
 namespace Tensile;
 

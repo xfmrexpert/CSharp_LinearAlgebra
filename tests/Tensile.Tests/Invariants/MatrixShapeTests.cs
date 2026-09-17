@@ -50,6 +50,22 @@ public class MatrixShapeTests
         Assert.True(new MatrixShape(0, 0).IsEmpty);
     }
 
+    /// <summary>
+    /// The public assembly compiles with overflow checking on. A record's
+    /// synthesized hash combines its fields by multiplication, which must be
+    /// unchecked to be a hash at all; this pins that the compiler emits it so,
+    /// with fields large enough that a checked multiply would throw.
+    /// </summary>
+    [Fact]
+    public void HashCodeDoesNotTripOverflowChecking()
+    {
+        var a = new MatrixShape(1, int.MaxValue, stride: 1);
+        var b = new MatrixShape(1, int.MaxValue, stride: 1);
+
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+        Assert.True(a == b);
+    }
+
     // ---- extent ------------------------------------------------------------
 
     /// <summary>

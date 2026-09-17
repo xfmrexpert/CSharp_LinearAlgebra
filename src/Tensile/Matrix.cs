@@ -100,6 +100,26 @@ public sealed unsafe class Matrix<T> : IDisposable where T : unmanaged, INumberB
     public MatrixView<T> Slice(int row, int column, int rows, int columns) =>
         View.Slice(row, column, rows, columns);
 
+    /// <summary>
+    /// Assert a structure without checking it, so that operations dispatch on
+    /// it at compile time.
+    ///
+    /// This is an instance method rather than an extension so the element type
+    /// comes from the receiver and only the structure has to be named:
+    /// <c>a.As&lt;UpperTriangular&gt;()</c>. C# has no partial inference for
+    /// explicit type arguments, so an extension would force both to be written
+    /// out at every call.
+    ///
+    /// Unchecked is the same trust a BLAS call places in its <c>uplo</c>
+    /// argument. Prefer a structured matrix that came from a factorization,
+    /// where the shape holds by construction; use
+    /// <see cref="StructuredMatrixExtensions.AsChecked{TStructure}"/> when the
+    /// claim is about data you did not produce.
+    /// </summary>
+    /// <typeparam name="TStructure">The structure to assert.</typeparam>
+    public StructuredMatrix<T, TStructure> As<TStructure>() where TStructure : IMatrixStructure =>
+        new(View);
+
     /// <summary>An independent copy, packed with no stride padding.</summary>
     public Matrix<T> Clone()
     {

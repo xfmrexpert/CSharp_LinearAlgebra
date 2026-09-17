@@ -14,9 +14,11 @@ namespace Tensile.Benchmarks;
 /// which are different problems with different fixes. Full GEMM landing at
 /// roughly 88% of this number is the expected, healthy result.
 ///
-/// A kernel the host CPU does not support returns without doing work, so its
-/// row is meaningless rather than absent -- read it together with the ISA line
-/// that tensile-diag prints.
+/// The kernel is a parameter drawn from <see cref="SupportedKernels"/> rather
+/// than one benchmark method each, so a kernel the host cannot run produces no
+/// row at all. Methods that returned early on an unsupported CPU were worse
+/// than useless: BenchmarkDotNet still measured the empty method and reported
+/// an apparently valid ceiling of a few nanoseconds.
 /// </summary>
 public unsafe class KernelCeilingBenchmarks : IDisposable
 {
@@ -29,6 +31,21 @@ public unsafe class KernelCeilingBenchmarks : IDisposable
     private double* _ap;
     private double* _bp;
     private double* _c;
+
+    /// <summary>Micro-kernels this CPU can actually run.</summary>
+    public static IEnumerable<string> SupportedKernels
+    {
+        get
+        {
+            if (Avx512Kernel16x8.IsSupported) yield return Avx512Kernel16x8.Name;
+            if (Avx2Kernel8x6.IsSupported) yield return Avx2Kernel8x6.Name;
+            yield return ScalarKernel4x4.Name;
+        }
+    }
+
+    /// <summary>Which micro-kernel this run measures.</summary>
+    [ParamsSource(nameof(SupportedKernels))]
+    public string Kernel { get; set; } = ScalarKernel4x4.Name;
 
     /// <summary>Allocate panels sized for the widest kernel; narrower ones use a prefix.</summary>
     [GlobalSetup]
@@ -43,32 +60,29 @@ public unsafe class KernelCeilingBenchmarks : IDisposable
     [GlobalCleanup]
     public void Cleanup() => Dispose();
 
-    /// <summary>AVX-512 16x8 kernel ceiling.</summary>
-    [Benchmark(Description = "AVX-512 16x8")]
-    public void Avx512()
+    /// <summary>
+    /// Run the selected kernel back to back on L1-resident panels. The switch is
+    /// per measured operation, not per kernel call, so it costs nothing against
+    /// <see cref="Repetitions"/> invocations.
+    /// </summary>
+    [Benchmark]
+    public void Ceiling()
     {
-        if (!Avx512Kernel16x8.IsSupported) return;
-
-        for (int r = 0; r < Repetitions; r++)
-            Avx512Kernel16x8.Execute(Depth, 1.0, _ap, _bp, _c, 16);
-    }
-
-    /// <summary>AVX2/FMA 8x6 kernel ceiling.</summary>
-    [Benchmark(Description = "AVX2/FMA 8x6")]
-    public void Avx2()
-    {
-        if (!Avx2Kernel8x6.IsSupported) return;
-
-        for (int r = 0; r < Repetitions; r++)
-            Avx2Kernel8x6.Execute(Depth, 1.0, _ap, _bp, _c, 8);
-    }
-
-    /// <summary>Portable scalar 4x4 kernel ceiling, as a floor to compare against.</summary>
-    [Benchmark(Description = "scalar 4x4")]
-    public void Scalar()
-    {
-        for (int r = 0; r < Repetitions; r++)
-            ScalarKernel4x4.Execute(Depth, 1.0, _ap, _bp, _c, 4);
+        if (Kernel == Avx512Kernel16x8.Name)
+        {
+            for (int r = 0; r < Repetitions; r++)
+                Avx512Kernel16x8.Execute(Depth, 1.0, _ap, _bp, _c, 16);
+        }
+        else if (Kernel == Avx2Kernel8x6.Name)
+        {
+            for (int r = 0; r < Repetitions; r++)
+                Avx2Kernel8x6.Execute(Depth, 1.0, _ap, _bp, _c, 8);
+        }
+        else
+        {
+            for (int r = 0; r < Repetitions; r++)
+                ScalarKernel4x4.Execute(Depth, 1.0, _ap, _bp, _c, 4);
+        }
     }
 
     /// <summary>Release the panels.</summary>

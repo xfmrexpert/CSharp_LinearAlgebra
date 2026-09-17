@@ -91,7 +91,7 @@ public static class MatrixOperations
         try
         {
             LuFactorization factorization = active.FactorLu(factors.View, blockSize);
-            return new LuDecomposition(factors, factorization, active, oneNorm);
+            return new LuDecomposition(factors, factorization, oneNorm);
         }
         catch
         {

@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
-using Tensile.Interop;
 using Tensile.Primitives;
 
 namespace Tensile.Benchmarks;
@@ -15,8 +14,9 @@ namespace Tensile.Benchmarks;
 /// - pin with <c>taskset -c 0</c> for the single-threaded comparison, and do
 ///   NOT pin for the threaded one, because Environment.ProcessorCount respects
 ///   the affinity mask and a pinned scaling sweep is meaningless;
-/// - check <see cref="Blis.Architecture"/> before quoting any ratio, since a
-///   <c>generic</c> BLIS build is a reference fallback and not a competitor;
+/// - check the BLIS architecture that <c>tensile-diag</c> prints before quoting
+///   any ratio, since a <c>generic</c> BLIS build is a reference fallback and
+///   not a competitor;
 /// - on a laptop part, capture <c>turbostat</c> alongside, because sustained
 ///   multi-threaded runs are usually power-limited rather than
 ///   algorithm-limited.
@@ -30,7 +30,6 @@ public unsafe class GemmBenchmarks : IDisposable
 
     private GemmDispatch? _serial;
     private GemmDispatch? _parallel;
-    private Blis? _blis;
 
     /// <summary>Square problem size; all three dimensions are N.</summary>
     [Params(128, 256, 512, 1024, 2048)]
@@ -46,7 +45,6 @@ public unsafe class GemmBenchmarks : IDisposable
 
         _serial = CreateDispatch(multithreaded: false);
         _parallel = CreateDispatch(multithreaded: true);
-        _blis = Blis.TryLoad(out _);
     }
 
     /// <summary>Release the operands and packing buffers.</summary>
@@ -60,14 +58,6 @@ public unsafe class GemmBenchmarks : IDisposable
     /// <summary>Multi-threaded blocked GEMM on the widest supported kernel.</summary>
     [Benchmark(Description = "Tensile, threaded")]
     public void Parallel() => Multiply(_parallel!);
-
-    /// <summary>
-    /// Native BLIS, when a shared library is present. Skipped silently
-    /// otherwise, which shows up as a missing row rather than a failure.
-    /// </summary>
-    [Benchmark(Description = "BLIS (native)")]
-    public void Native() =>
-        _blis?.Multiply(N, N, N, 1.0, _a, N, _b, N, 0.0, _c, N);
 
     private void Multiply(GemmDispatch dispatch)
     {
@@ -118,9 +108,6 @@ public unsafe class GemmBenchmarks : IDisposable
 
         _parallel?.Dispose();
         _parallel = null;
-
-        _blis?.Dispose();
-        _blis = null;
 
         GC.SuppressFinalize(this);
     }

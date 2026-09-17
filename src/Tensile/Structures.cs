@@ -192,37 +192,28 @@ public readonly ref struct StructuredMatrix<T, TStructure>
     public static implicit operator MatrixView<T>(StructuredMatrix<T, TStructure> matrix) => matrix.View;
 }
 
-/// <summary>Attaching and checking structure claims.</summary>
+/// <summary>Checking structure claims that were not established by construction.</summary>
 public static class StructuredMatrixExtensions
 {
-    /// <summary>
-    /// Assert a structure without checking it. This is the same trust a BLAS
-    /// call places in its <c>uplo</c> argument: cheap, and wrong if you are
-    /// wrong. Prefer a structured matrix that came from a factorization, where
-    /// the shape holds by construction, or use
-    /// <see cref="AsChecked{T, TStructure}"/> when the claim is about data you
-    /// did not produce.
-    /// </summary>
-    /// <typeparam name="T">Element type.</typeparam>
-    /// <typeparam name="TStructure">The structure to assert.</typeparam>
-    /// <param name="matrix">The matrix to reinterpret.</param>
-    public static StructuredMatrix<T, TStructure> As<T, TStructure>(this Matrix<T> matrix)
-        where T : unmanaged, System.Numerics.INumberBase<T>
-        where TStructure : IMatrixStructure =>
-        new(matrix.View);
-
     /// <summary>
     /// Assert a structure, verifying first that the unreferenced part really is
     /// zero. O(n^2), so this is for validating input rather than for inner
     /// loops, and it rejects a packed factorization by design.
+    ///
+    /// Only the structure is a type parameter. The element type is fixed at
+    /// <see cref="double"/> because that is what the verification reads; an
+    /// unused type parameter here would let a caller write
+    /// <c>AsChecked&lt;float, UpperTriangular&gt;()</c> on a matrix of doubles
+    /// and misdescribe what was checked.
     /// </summary>
-    /// <typeparam name="T">Element type.</typeparam>
     /// <typeparam name="TStructure">The structure to assert.</typeparam>
     /// <param name="matrix">The matrix to reinterpret.</param>
     /// <exception cref="ArgumentException">The matrix does not have the claimed shape.</exception>
-    public static StructuredMatrix<double, TStructure> AsChecked<T, TStructure>(this Matrix<double> matrix)
+    public static StructuredMatrix<double, TStructure> AsChecked<TStructure>(this Matrix<double> matrix)
         where TStructure : IMatrixStructure
     {
+        ArgumentNullException.ThrowIfNull(matrix);
+
         if (!TStructure.UnreferencedPartIsZero(matrix.ReadOnlyView))
             throw new ArgumentException(
                 $"Matrix is not {TStructure.Name}: elements outside the referenced triangle are non-zero.",

@@ -19,18 +19,15 @@ namespace Tensile;
 /// </summary>
 public sealed class LuDecomposition : IDisposable
 {
-    private readonly Workspace _workspace;
     private readonly double _oneNorm;
 
     private Matrix<double>? _factors;
     private LuFactorization? _factorization;
 
-    internal LuDecomposition(
-        Matrix<double> factors, LuFactorization factorization, Workspace workspace, double oneNorm)
+    internal LuDecomposition(Matrix<double> factors, LuFactorization factorization, double oneNorm)
     {
         _factors = factors;
         _factorization = factorization;
-        _workspace = workspace;
         _oneNorm = oneNorm;
     }
 

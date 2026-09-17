@@ -98,12 +98,19 @@ public readonly unsafe ref struct MatrixView<T> where T : unmanaged
     /// <exception cref="ArgumentOutOfRangeException">The requested block leaves this window.</exception>
     public MatrixView<T> Slice(int row, int column, int rows, int columns)
     {
+        // Checked by subtraction, never as row + rows: the sum overflows int for
+        // large arguments and wraps negative, which passes a "<= Rows" test and
+        // hands back a view pointing outside the buffer. Both operands are
+        // already known non-negative and no more than the extent, so the
+        // subtractions cannot themselves overflow.
         ArgumentOutOfRangeException.ThrowIfNegative(row);
         ArgumentOutOfRangeException.ThrowIfNegative(column);
         ArgumentOutOfRangeException.ThrowIfNegative(rows);
         ArgumentOutOfRangeException.ThrowIfNegative(columns);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(row + rows, Rows);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(column + columns, Columns);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(row, Rows);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(rows, Rows - row);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(column, Columns);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(columns, Columns - column);
 
         return new MatrixView<T>(_origin + (nint)column * Stride + row, rows, columns, Stride);
     }
@@ -117,7 +124,45 @@ public readonly unsafe ref struct MatrixView<T> where T : unmanaged
                 $"Shape mismatch: source is {Rows}x{Columns}, destination is {destination.Rows}x{destination.Columns}.",
                 nameof(destination));
 
+        // Column by column is not overlap-safe on its own. Span.CopyTo protects
+        // each individual column, but if the windows overlap across columns --
+        // two slices of one matrix a column apart, say -- writing destination
+        // column j can destroy source column j+1 before it is read. Staging
+        // costs an allocation only in that case, and is correct whatever the
+        // two strides are.
+        if (Overlaps(destination))
+        {
+            T[] staged = ToArray();
+
+            for (int j = 0; j < Columns; j++)
+                staged.AsSpan(j * Rows, Rows).CopyTo(destination.Column(j));
+
+            return;
+        }
+
         for (int j = 0; j < Columns; j++) Column(j).CopyTo(destination.Column(j));
+    }
+
+    /// <summary>
+    /// Whether this window and <paramref name="other"/> share any storage.
+    ///
+    /// Compares whole address spans rather than the exact strided footprint, so
+    /// it can report an overlap for two interleaved windows that do not in fact
+    /// share an element. That direction is the safe one: the caller only pays a
+    /// staging copy.
+    /// </summary>
+    /// <param name="other">The window to test against.</param>
+    public bool Overlaps(MatrixView<T> other)
+    {
+        if (IsEmpty || other.IsEmpty) return false;
+
+        T* start = _origin;
+        T* end = _origin + (nint)(Columns - 1) * Stride + Rows;
+
+        T* otherStart = other._origin;
+        T* otherEnd = other._origin + (nint)(other.Columns - 1) * other.Stride + other.Rows;
+
+        return start < otherEnd && otherStart < end;
     }
 
     /// <summary>Set every element of this window to <paramref name="value"/>.</summary>
@@ -213,12 +258,19 @@ public readonly unsafe ref struct ReadOnlyMatrixView<T> where T : unmanaged
     /// <exception cref="ArgumentOutOfRangeException">The requested block leaves this window.</exception>
     public ReadOnlyMatrixView<T> Slice(int row, int column, int rows, int columns)
     {
+        // Checked by subtraction, never as row + rows: the sum overflows int for
+        // large arguments and wraps negative, which passes a "<= Rows" test and
+        // hands back a view pointing outside the buffer. Both operands are
+        // already known non-negative and no more than the extent, so the
+        // subtractions cannot themselves overflow.
         ArgumentOutOfRangeException.ThrowIfNegative(row);
         ArgumentOutOfRangeException.ThrowIfNegative(column);
         ArgumentOutOfRangeException.ThrowIfNegative(rows);
         ArgumentOutOfRangeException.ThrowIfNegative(columns);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(row + rows, Rows);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(column + columns, Columns);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(row, Rows);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(rows, Rows - row);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(column, Columns);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(columns, Columns - column);
 
         return new ReadOnlyMatrixView<T>(_origin + (nint)column * Stride + row, rows, columns, Stride);
     }

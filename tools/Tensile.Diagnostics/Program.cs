@@ -38,14 +38,21 @@ public static class Program
         bool quiet = args.Contains("--quiet");
 
         ReportEnvironment();
-        ExerciseKernels();
 
-        if (quiet) return 0;
+        // Exercising the kernels also checks them against the reference, and
+        // that result is a gate rather than a print: CI runs this step, so a
+        // kernel producing NaNs must fail it rather than scroll past.
+        bool passed = ExerciseKernels();
 
-        ReportBlis();
-        ReportEstimatorAccuracy();
+        if (!quiet)
+        {
+            ReportBlis();
+            ReportEstimatorAccuracy();
+        }
 
-        return 0;
+        Console.WriteLine(passed ? "kernel checks: PASS" : "kernel checks: FAIL");
+
+        return passed ? 0 : 1;
     }
 
     private static void ReportEnvironment()
@@ -71,23 +78,32 @@ public static class Program
     /// Run each supported kernel through a real GEMM so the JIT compiles it.
     /// Small sizes on purpose: the goal is compilation, not measurement.
     /// </summary>
-    private static unsafe void ExerciseKernels()
+    /// <returns>Whether every supported kernel matched the reference.</returns>
+    private static unsafe bool ExerciseKernels()
     {
         Console.WriteLine("=== micro-kernels ===");
 
-        Exercise<Avx512Kernel16x8>();
-        Exercise<Avx2Kernel8x6>();
-        Exercise<ScalarKernel4x4>();
+        bool passed = Exercise<Avx512Kernel16x8>();
+        passed &= Exercise<Avx2Kernel8x6>();
+        passed &= Exercise<ScalarKernel4x4>();
 
         Console.WriteLine();
+        return passed;
     }
 
-    private static unsafe void Exercise<TKernel>() where TKernel : struct, IMicroKernel
+    /// <summary>
+    /// Residual bound for a 96x96 product. A correct blocked GEMM lands around
+    /// 1e-16; anything near this threshold is a real defect rather than a
+    /// summation-order difference.
+    /// </summary>
+    private const double ResidualLimit = 1e-12;
+
+    private static unsafe bool Exercise<TKernel>() where TKernel : struct, IMicroKernel
     {
         if (!TKernel.IsSupported)
         {
             Console.WriteLine($"  {TKernel.Name,-16}: not supported on this CPU");
-            return;
+            return true;
         }
 
         const int N = 96;
@@ -105,9 +121,13 @@ public static class Program
             Reference.Multiply(N, N, N, 1.0, a, N, b, N, 0.0, expected, N);
 
             double residual = Reference.RelativeResidual(N, N, c, N, expected, N);
+            bool ok = double.IsFinite(residual) && residual < ResidualLimit;
 
             Console.WriteLine(
-                $"  {TKernel.Name,-16}: MR={TKernel.Mr} NR={TKernel.Nr}, residual {residual:E3}");
+                $"  {TKernel.Name,-16}: MR={TKernel.Mr} NR={TKernel.Nr}, residual {residual:E3}"
+                + (ok ? "" : "   FAIL"));
+
+            return ok;
         }
         finally
         {

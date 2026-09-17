@@ -138,6 +138,65 @@ public unsafe class MatrixApiTests
         Assert.Throws<ArgumentOutOfRangeException>(() => a[0, -1]);
     }
 
+    /// <summary>
+    /// The bounds check must not be computed as row + rows: that sum overflows
+    /// int for large arguments and wraps negative, which passes a "<= Rows"
+    /// comparison and hands back a view pointing outside the buffer. Before the
+    /// fix this returned a 1x2000000000 view about 16 GB past a 1x4 matrix.
+    /// </summary>
+    [Fact]
+    public void SliceRejectsArgumentsThatOverflowTheBoundsCheck()
+    {
+        using var a = Matrix.Zeros<double>(1, 4);
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => a.Slice(0, 2_000_000_000, 1, 2_000_000_000));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => a.Slice(2_000_000_000, 0, 2_000_000_000, 1));
+
+        // The same arithmetic, on the read-only view.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => a.ReadOnlyView.Slice(0, 2_000_000_000, 1, 2_000_000_000));
+    }
+
+    /// <summary>
+    /// Copying between overlapping windows must not destroy the source. Column
+    /// by column, writing destination column j overwrites source column j+1
+    /// before it is read; Span.CopyTo only protects within one column.
+    /// </summary>
+    [Fact]
+    public void CopyToIsSafeBetweenOverlappingWindows()
+    {
+        using var a = Matrix.Zeros<double>(2, 4);
+
+        for (int j = 0; j < 4; j++)
+            for (int i = 0; i < 2; i++)
+                a[i, j] = j * 10 + i;
+
+        // Shift columns 0..1 one place to the right, into columns 1..2.
+        a.Slice(0, 0, 2, 2).CopyTo(a.Slice(0, 1, 2, 2));
+
+        Assert.Equal(0.0, a[0, 1]);
+        Assert.Equal(1.0, a[1, 1]);
+        Assert.Equal(10.0, a[0, 2]);
+        Assert.Equal(11.0, a[1, 2]);
+
+        // Untouched either side.
+        Assert.Equal(0.0, a[0, 0]);
+        Assert.Equal(30.0, a[0, 3]);
+    }
+
+    [Fact]
+    public void OverlapDetectionSeparatesSharedFromDisjointWindows()
+    {
+        using var a = Matrix.Zeros<double>(4, 4);
+        using var b = Matrix.Zeros<double>(4, 4);
+
+        Assert.True(a.Slice(0, 0, 4, 2).Overlaps(a.Slice(0, 1, 4, 2)));
+        Assert.False(a.Slice(0, 0, 4, 2).Overlaps(a.Slice(0, 2, 4, 2)));
+        Assert.False(a.View.Overlaps(b.View));
+    }
+
     [Fact]
     public void CloneIsIndependentAndPacked()
     {
@@ -378,7 +437,7 @@ public unsafe class MatrixApiTests
         using Matrix<double> expected = RandomMatrix(n, 3, seed: 24);
         using Matrix<double> b = u.Multiply(expected);
 
-        using Matrix<double> x = u.As<double, UpperTriangular>().Solve(b);
+        using Matrix<double> x = u.As<UpperTriangular>().Solve(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -392,7 +451,7 @@ public unsafe class MatrixApiTests
         using Matrix<double> expected = RandomMatrix(n, 3, seed: 26);
         using Matrix<double> b = l.Multiply(expected);
 
-        using Matrix<double> x = l.As<double, LowerTriangular>().Solve(b);
+        using Matrix<double> x = l.As<LowerTriangular>().Solve(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -408,7 +467,7 @@ public unsafe class MatrixApiTests
         using Matrix<double> transpose = Transpose(u);
         using Matrix<double> b = transpose.Multiply(expected);
 
-        using Matrix<double> x = u.As<double, UpperTriangular>().SolveTransposed(b);
+        using Matrix<double> x = u.As<UpperTriangular>().SolveTransposed(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -436,10 +495,10 @@ public unsafe class MatrixApiTests
         using Matrix<double> upper = UpperTriangularMatrix(6, seed: 30);
         using Matrix<double> dense = RandomMatrix(6, 6, seed: 31);
 
-        StructuredMatrix<double, UpperTriangular> accepted = upper.AsChecked<double, UpperTriangular>();
+        StructuredMatrix<double, UpperTriangular> accepted = upper.AsChecked<UpperTriangular>();
         Assert.Equal(6, accepted.Rows);
 
-        Assert.Throws<ArgumentException>(() => dense.AsChecked<double, UpperTriangular>());
+        Assert.Throws<ArgumentException>(() => dense.AsChecked<UpperTriangular>());
     }
 
     [Fact]
@@ -448,7 +507,7 @@ public unsafe class MatrixApiTests
         using Matrix<double> a = RandomMatrix(4, 3, seed: 32);
         using Matrix<double> b = RandomMatrix(4, 1, seed: 33);
 
-        Assert.Throws<ArgumentException>(() => a.As<double, UpperTriangular>().Solve(b));
+        Assert.Throws<ArgumentException>(() => a.As<UpperTriangular>().Solve(b));
     }
 
     // ---- norms -------------------------------------------------------------

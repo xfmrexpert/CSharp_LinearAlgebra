@@ -74,6 +74,11 @@ copy would hide its cost.
 repacking. Every operation handles a strided view, and the tests check that
 padding is never written.
 
+`CopyTo` is safe between overlapping windows — two slices of one matrix, say —
+and stages through a temporary when it detects an overlap. Copying column by
+column would otherwise destroy a source column before reading it, since
+`Span.CopyTo` only protects each column individually.
+
 ---
 
 ## Structure in the type system
@@ -87,7 +92,7 @@ choice does not compile and the right one is selected with no run-time branch.
 using Matrix<double> u = BuildUpperTriangular();
 
 // Back substitution. No factorization, no branch, chosen at compile time.
-using Matrix<double> x = u.As<double, UpperTriangular>().Solve(b);
+using Matrix<double> x = u.As<UpperTriangular>().Solve(b);
 ```
 
 Shipped structures:
@@ -115,10 +120,11 @@ lu.Upper.SolveInPlace(x.View);   // reads the diagonal and above
 UpperTriangular.UnreferencedPartIsZero(lu.Upper.View);   // false — L is there
 ```
 
-`As<T, TStructure>()` is an unchecked assertion, the same trust a BLAS call
-places in its `uplo` argument. When the claim is about data you did not produce,
-`AsChecked` verifies that the unreferenced part really is zero — O(n²), and it
-rejects a packed factorization by design.
+`As<TStructure>()` is an unchecked assertion, the same trust a BLAS call places
+in its `uplo` argument. It is an instance method, so the element type comes from
+the matrix and only the structure is named. When the claim is about data you did
+not produce, `AsChecked<TStructure>()` verifies that the unreferenced part really
+is zero — O(n²), and it rejects a packed factorization by design.
 
 The safest structured matrices are the ones you never assert: `lu.Lower` and
 `lu.Upper` have their shape by construction.
@@ -142,8 +148,15 @@ double det    = lu.Determinant();
 factor in place instead and skip the copy:
 
 ```csharp
+using Tensile;
+using Tensile.Primitives;
+
+// Any matrix you do not need intact afterwards; it is overwritten with the
+// packed factors, and must outlive the factorization that indexes into it.
+using Matrix<double> scratch = a.Clone();
 using var workspace = new Workspace();
-using Primitives.LuFactorization f = workspace.FactorLu(scratch.View);
+
+using LuFactorization factorization = workspace.FactorLu(scratch.View);
 ```
 
 Three things worth knowing:

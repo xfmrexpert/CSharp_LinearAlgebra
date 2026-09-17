@@ -37,38 +37,40 @@ the managed-vs-native question is a first-class motivation, not just a means.
 
 # Current state
 
-Library plus a test project, `net10.0`, column-major throughout, unit row
-stride, double precision only, no transposes in GEMM, no complex yet. The
-library itself still takes no package references; the test project takes
-xunit.v3.
+A library plus tests, benchmarks and a diagnostics tool, `net10.0`,
+column-major throughout, unit row stride. `Matrix<T>` is generic over
+`unmanaged, INumberBase<T>`, so storage, views and the structure vocabulary
+already work for any numeric type; arithmetic is double-only and lives in
+extensions on the closed `Matrix<double>`, so adding a type is additive.
 
-| File | Purpose |
+The three-layer architecture this file has described from the start now
+exists in full:
+
+| Layer | Namespace | Holds |
+| --- | --- | --- |
+| Ergonomic | `Tensile` | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations |
+| Primitives | `Tensile.Primitives` | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, Blas1/2, normest1 |
+| Interop | `Tensile.Interop` | The optional BLIS binding |
+
+| Path | Purpose |
 | --- | --- |
-| `MicroKernels.cs` | `IMicroKernel` + AVX-512 16x8, AVX2/FMA 8x6, scalar 4x4 |
-| `Packing.cs` | A/B panel packing, zero-padded edges, panel-range variants for parallel packing |
-| `Gemm.cs` | Five-loop blocked GEMM, generic over kernel, single-threaded |
-| `ParallelGemm.cs` | Multi-threaded GEMM, loop-2 (jr) parallelism |
-| `GemmDispatch.cs` | Owns both scratches, picks serial vs threaded by work size |
-| `KernelProbe.cs` | Micro-kernel ceiling on L1-resident panels |
-| `Blis.cs` | Optional native `bli_dgemm` binding + dispatch/ABI queries |
-| `Reference.cs` | Naive GEMM oracle + relative Frobenius residual |
-| `TimingStatistics.cs` | Median and interpolated quartiles |
-| `Program.cs` | Correctness checks and benchmarks; exits non-zero on failure |
-| `Blas1.cs` | Vectorised scal/axpy/iamax/dot for the LU panel |
-| `Blas2.cs` | A*X and A^T*X for narrow panels, used by the norm estimator |
-| `Triangular.cs` | Unblocked TRSM, blocked by 4 right-hand sides, plus transposed solves |
-| `Lu.cs` | Blocked right-looking LU with partial pivoting, solve and transpose solve |
-| `LinearOperators.cs` | `ILinearOperator`, dense/matrix-power and LU-inverse operators |
-| `NormEstimate.cs` | `normest1`, exact 1- and inf-norms, `dgecon`-equivalent rcond |
-| `LuTest.cs` | LU residual verification + block-size sweep |
-| `NormEstimateTest.cs` | Estimator accuracy by ensemble, rcond checks, cost report |
-| `tests/GemmLab.Tests/` | xunit suite, 649 tests, run per supported micro-kernel |
-| `.github/workflows/ci.yml` | Build, test, harness, and the kernel spill gate |
-| `disasm.sh` | Per-kernel JIT disassembly + accumulator-spill check, CI-gating |
+| `src/Tensile/Matrix.cs` | Owning storage, 64-byte aligned native, plus the creation factories |
+| `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`, ref structs so a borrowed window cannot escape |
+| `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
+| `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
+| `src/Tensile/LuDecomposition.cs` | Owning factorization; captures ||A||_1 before overwriting A |
+| `src/Tensile/MatrixOperations.cs` | Fluent extensions on `Matrix<double>` and the structured solves |
+| `src/Tensile/Primitives/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, NormEstimate, LinearOperators, Reference |
+| `src/Tensile/Interop/Blis.cs` | Native `bli_dgemm` binding + dispatch/ABI queries |
+| `tests/Tensile.Tests/` | xunit.v3, 683 tests, kernel-generic contracts run once per supported kernel |
+| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
+| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
+| `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
+| `docs/api.md` | The API guide |
 
-The architecture is three layers, deliberately: storage/views, allocation-free
-span-based kernels, then an ergonomic layer. Only the middle layer exists so
-far.
+`GenerateDocumentationFile` with `TreatWarningsAsErrors` makes an undocumented
+public member a build error. That is the mechanism keeping the API documented;
+it is not optional politeness.
 
 ---
 
@@ -218,12 +220,17 @@ well- and ill-conditioned inputs.
 
    Between them these exercise the sign matrix, the transposed product, the row
    maxima, the descending sort and the unit-vector selection, without asserting
-   any particular estimate. On uniform random signed matrices the estimator is
-   exact only ~38% of the time at `t=2` (55% at `t=4`) — that is the ensemble,
-   not a defect: random column 1-norms cluster within a few percent of each
-   other, so picking the exact argmax among n near-ties is hard and missing it
-   is nearly free. Worst observed ratio is 0.76, well inside the factor-of-2
-   the algorithm promises.
+   any particular estimate.
+
+   Exactness depends heavily on the ensemble, which is why `tensile-diag`
+   reports several rather than one number. On *uniform* random signed matrices
+   it is exact 26% of the time at `t=2` and 41% at `t=4`; with a few dominant
+   columns (the earlier ensemble, and the more realistic one) it is 61% and
+   79%. Neither is a defect: uniform column 1-norms cluster within a few
+   percent, so picking the exact argmax among n near-ties is hard and missing
+   it is nearly free. Worst observed ratio is 0.76, well inside the factor of
+   two the algorithm promises. An earlier revision of this file quoted 38% and
+   55% from the skewed ensemble alone.
 
 9. **Dumping JIT disassembly through `dotnet run` loses methods.** The SDK
    driver and the application are separate processes and both honour
@@ -298,11 +305,21 @@ well- and ill-conditioned inputs.
   which is strong evidence but not the same thing.
 - **The estimator's `Blas2` products are O(n^2 t) with no blocking.** Fine at
   the sizes that matter for `dgecon`, possibly not for `expm`'s inner loop.
+- **`Workspace` serialises every operation on one lock.** Correct and cheap
+  against O(n^2) work, but it means concurrent independent solves on a shared
+  workspace queue. Only worth revisiting if a real workload wants many small
+  factorizations in parallel, where per-thread workspaces are the answer.
+- **`Matrix<T>` allocates native memory per instance and relies on disposal.**
+  A dropped reference leaks until finalization. A pooled allocator is the
+  obvious fix and is not written.
+- **No `SymmetricPositiveDefinite` structure**, because there is no Cholesky to
+  dispatch to. This is the missing half of the type-system argument.
 
 # Next steps, in priority order
 
-`normest1` and the LU/`ParallelGemm` routing that used to head this list are
-done; so are the test project, CI and the licence. What remains:
+`normest1`, the LU/`ParallelGemm` routing, the test project, CI and the licence
+are done, and so is the library shaping: `src`/`tests`/`bench`/`tools` layout,
+a documented public API, and structure-typed dispatch. What remains:
 
 1. **`expm`** via Al-Mohy & Higham (2009) scaling-and-squaring with degree-13
    Pade. Use the 2009 algorithm, not Higham 2005: it picks the scaling from
@@ -316,9 +333,12 @@ done; so are the test project, CI and the licence. What remains:
    further kernel tuning, and it is the natural bridge to sparse.
 3. Re-take the LU table on the 12700H now that both sides of the ratio use the
    same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while there.
-4. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
+4. **Cholesky**, which is the cheapest way to make the structure vocabulary pay
+   off twice over: FEM mass and stiffness matrices are symmetric positive
+   definite, and it is the third genuinely different `Solve` path.
+5. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
    GEMM.
-5. Complex support. `System.Numerics.Complex` is interleaved, which matches
+6. Complex support. `System.Numerics.Complex` is interleaved, which matches
    `zgemm` layout but vectorises badly; a split (SoA) representation is 2-4x
    faster for element-wise work. Start interleaved, switch only if profiling of
    real assembly workloads says so.
@@ -333,11 +353,13 @@ genuinely unwise; port from reference LAPACK if and when needed.
 The argument that a 2026 C# library can beat the incumbents rests less on FLOPs
 than on things no BLAS-lineage library can express:
 
-- **Structure in the type system.** `Matrix<T, TStructure>` with static
-  abstract dispatch so `A.Solve(b)` picks Cholesky vs LU vs triangular
-  substitution at compile time. LAPACK encodes this in function names
-  (`dposv` vs `dgesv`); getting it wrong is silent. This eliminates a real bug
-  class at zero runtime cost.
+- **Structure in the type system** — *done, in first form.* `IMatrixStructure`
+  with static abstract dispatch, so `A.Solve(b)` picks triangular substitution
+  over LU at compile time. The remaining half is Cholesky: `General` and the
+  three triangular structures exist, `SymmetricPositiveDefinite` does not,
+  because nothing would dispatch to it yet. Note the deliberate limit on what a
+  structure claims — which triangle is *read*, not that the rest is zero —
+  since packed LU makes the stronger reading impossible.
 - **One algorithm, every numeric type.** LAPACK maintains four hand-written
   copies (s/d/c/z) that drift. Generic math means one LU instantiated for
   `float`, `double`, `Complex`, `Half`, `BFloat16` — and double-double or
@@ -354,25 +376,24 @@ than on things no BLAS-lineage library can express:
 # Testing
 
 ```
-dotnet test -c Release                  # unit suite
-dotnet run -c Release -- --verify-only  # whole-program harness, exits non-zero on failure
-./disasm.sh                             # kernel codegen gate
+dotnet test Tensile.slnx -c Release                        # unit suite
+dotnet run -c Release --project tools/Tensile.Diagnostics  # what this host supports
+./disasm.sh                                                # kernel codegen gate
 ```
 
 Three layers, deliberately overlapping:
 
-- **The xunit suite** (`tests/GemmLab.Tests`) is the regression net. Every
-  contract that is generic over the micro-kernel runs once per kernel, via an
-  abstract base class with one concrete subclass each; a kernel the host cannot
-  run is reported *skipped*, never silently passed. Internals are visible to it
-  because `Packing`, `Blas1`, `Blas2` and `Triangular` are exactly where an
-  off-by-one hides.
-- **The console harness** (`Program.cs`) covers what unit tests cannot: BLIS
-  dispatch reporting, the benchmark plumbing itself, and sweeps large enough to
-  be worth reporting rather than asserting. `--verify-only` skips the
-  benchmarks and returns an exit code.
-- **`disasm.sh`** is the codegen gate, and it is the one CI job that cannot be
-  replaced by a test: correctness is unaffected by a spill, only speed is.
+- **The xunit suite** (`tests/Tensile.Tests`) is the regression net. Every
+  contract generic over the micro-kernel runs once per kernel, via an abstract
+  base class with one concrete subclass each; a kernel the host cannot run is
+  reported *skipped*, never silently passed. Internals are visible to it because
+  `Packing`, `Blas1`, `Blas2` and `Triangular` are exactly where an off-by-one
+  hides.
+- **`tensile-diag`** covers what unit tests cannot: which kernels this host
+  actually has, what BLIS dispatched to, and estimator accuracy by ensemble —
+  numbers worth reporting rather than asserting.
+- **`disasm.sh`** is the codegen gate, and the one CI job no test can replace:
+  correctness is unaffected by a spill, only speed is.
 
 Guidance that has already been paid for once:
 
@@ -383,6 +404,10 @@ Guidance that has already been paid for once:
 - **Test a heuristic by its invariants**, not by its accuracy. See finding 8.
 - **A `Skip` that is really an early `return` is a lie.** This is why the suite
   is on xunit.v3, which has `Assert.Skip`.
+- **The codegen gate needs a single process.** BenchmarkDotNet spawns a child
+  process per benchmark and both honour `DOTNET_JitStdOutFile`, so it cannot
+  host the dump — the same failure as running it through `dotnet run`. That is
+  what `tools/Tensile.Diagnostics` is for.
 
 ---
 

@@ -1,6 +1,0 @@
-<Solution>
-  <Folder Name="/tests/">
-    <Project Path="tests/GemmLab.Tests/GemmLab.Tests.csproj" />
-  </Folder>
-  <Project Path="GemmLab.csproj" />
-</Solution>

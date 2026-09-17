@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Tensile</RootNamespace>
+    <AssemblyName>Tensile</AssemblyName>
+
+    <!-- Public API is documented; a missing doc comment on a public member is
+         a build error, which is the only reliable way to keep it that way. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- Keep JIT inlining decisions from shifting between tiers while measuring. -->
+    <TieredPGO>false</TieredPGO>
+
+    <PackageId>Tensile</PackageId>
+    <Description>Dense linear algebra for .NET: blocked GEMM with hand-written micro-kernels, LU with partial pivoting, and 1-norm condition estimation.</Description>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Packing, Blas1, Blas2 and Triangular are implementation detail of the
+         public surface, and are exactly where an off-by-one hides, so they are
+         tested directly rather than only through their callers. -->
+    <InternalsVisibleTo Include="Tensile.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -36,6 +36,9 @@
          per-kernel workspace factory, so kernel-generic contracts can drive
          the public types through a chosen micro-kernel. -->
     <InternalsVisibleTo Include="Tensile.Tests" />
+    <!-- The interop package pins view buffers itself, since it has its own
+         native seam and does not go through Tensile.Kernels. -->
+    <InternalsVisibleTo Include="Tensile.Interop.Blis" />
     <InternalsVisibleTo Include="Tensile.Benchmarks" />
     <InternalsVisibleTo Include="tensile-diag" />
   </ItemGroup>

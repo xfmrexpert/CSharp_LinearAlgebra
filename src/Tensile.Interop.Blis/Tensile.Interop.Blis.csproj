@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Tensile.Interop</RootNamespace>
+    <AssemblyName>Tensile.Interop.Blis</AssemblyName>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Loads and calls native code, so it needs function pointers. This is
+         the one thing a consumer of the core package never carries: nothing in
+         Tensile or Tensile.Kernels references this assembly (invariant I8,
+         docs/security-design.md), and only a project that adds this package
+         gains a path that dlopens a library named by the environment. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Optimize>true</Optimize>
+
+    <PackageId>Tensile.Interop.Blis</PackageId>
+    <Description>Optional native BLIS binding for Tensile, used as a performance baseline. Loads libblis at run time; see README.</Description>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Tensile/Tensile.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The pointer-taking overload of Multiply is internal; the benchmarks
+         and diagnostics hold native operands and use it directly. -->
+    <InternalsVisibleTo Include="Tensile.Benchmarks" />
+    <InternalsVisibleTo Include="tensile-diag" />
+    <InternalsVisibleTo Include="Tensile.Tests" />
+  </ItemGroup>
+
+</Project>

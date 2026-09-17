@@ -30,7 +30,8 @@ dispatch, factorizations, norms, workspaces, and matrix-free operators.
 | Path | Contents |
 |---|---|
 | `src/Tensile` | The public assembly: compiled with unsafe code disallowed and integer overflow checking on. Matrices, views, structures, factorizations, operators. |
-| `src/Tensile.Kernels` | The kernel assembly: micro-kernels, packing, GEMM, LU, triangular solves. All `internal`, all the library's unsafe code, reached through one pinning seam. Also holds the optional BLIS binding until it gets its own package. |
+| `src/Tensile.Kernels` | The kernel assembly: micro-kernels, packing, GEMM, LU, triangular solves. All `internal`, all the library's unsafe code, reached through one pinning seam. |
+| `src/Tensile.Interop.Blis` | The optional native BLIS binding, a separate package. The only native code loading in the family; the core never references it. |
 | `tests/Tensile.Tests` | xunit suite. Contracts generic over the micro-kernel run once per supported kernel. |
 | `bench/Tensile.Benchmarks` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep. |
 | `tools/Tensile.Diagnostics` | `tensile-diag`: host ISA, BLIS dispatch, estimator accuracy. Also the single process the codegen gate drives. |
@@ -51,6 +52,12 @@ The project targets `net10.0` and requires the .NET 10 SDK. The verification
 results below were originally collected on .NET 8.
 
 ## Native BLIS comparison
+
+The binding lives in its own package, `Tensile.Interop.Blis`, which the
+benchmarks and `tensile-diag` reference and the library does not. A project
+that only uses `Tensile` carries no code that loads a native library. Read
+`src/Tensile.Interop.Blis/README.md` before pointing `TENSILE_BLIS_LIBRARY` at
+anything on a machine you do not control.
 
 On Debian/Ubuntu/Pop!_OS, install the shared library and development symlink:
 

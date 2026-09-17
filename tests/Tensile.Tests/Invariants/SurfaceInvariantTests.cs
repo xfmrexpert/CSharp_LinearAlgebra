@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security;
+using Tensile.Interop;
 using Tensile.Kernels;
 
 namespace Tensile.Tests.Invariants;
@@ -132,9 +133,7 @@ public class SurfaceInvariantTests
     /// I8: the package loads no native code. The BLIS binding, which dlopens a
     /// path read from an environment variable, ships in a separate opt-in
     /// package, so a consumer who never asked for it never carries it. Checked
-    /// on both assemblies: the binding is currently parked, internal, in the
-    /// kernel assembly, which still ships in the package, so this stays red
-    /// until Phase 4 gives it a package of its own.
+    /// on both assemblies of the core package.
     /// </summary>
     [Theory]
     [MemberData(nameof(Package))]
@@ -147,8 +146,7 @@ public class SurfaceInvariantTests
 
         Assert.True(
             present.Count == 0,
-            $"[I8] interop types in {assembly.GetName().Name} (closed by Phase 4, separate Tensile.Interop.Blis package): "
-            + string.Join(", ", present));
+            $"[I8] interop types in {assembly.GetName().Name}: " + string.Join(", ", present));
     }
 
     /// <summary>
@@ -172,6 +170,54 @@ public class SurfaceInvariantTests
         Assert.True(
             imports.Count == 0,
             $"[I8] DllImport in {assembly.GetName().Name}: " + string.Join(", ", imports));
+    }
+
+    /// <summary>
+    /// I8, stated as a dependency: neither core assembly references the
+    /// interop package. The dependency graph runs the other way -- the interop
+    /// package references the core -- so a consumer of the core has no route
+    /// to the binding, transitive or otherwise.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Package))]
+    public void CoreDoesNotReferenceTheInteropPackage(Assembly assembly)
+    {
+        string interop = typeof(Blis).Assembly.GetName().Name!;
+
+        var referenced = assembly.GetReferencedAssemblies()
+            .Select(r => r.Name)
+            .Where(n => n == interop || (n?.StartsWith("Tensile.Interop", StringComparison.Ordinal) ?? false))
+            .ToList();
+
+        Assert.True(
+            referenced.Count == 0,
+            $"[I8] {assembly.GetName().Name} references " + string.Join(", ", referenced));
+    }
+
+    /// <summary>
+    /// I3 applied to the interop package: it has a native seam of its own, and
+    /// it pins views inside it rather than asking the caller for pointers.
+    /// </summary>
+    [Fact]
+    public void InteropPackageExposesNoPointers()
+    {
+        var offenders = new List<string>();
+
+        foreach (Type type in typeof(Blis).Assembly.GetExportedTypes())
+        {
+            const BindingFlags Declared =
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+            foreach (MemberInfo member in type.GetMembers(Declared))
+            {
+                if (TypesInvolvedIn(member).Any(IsPointerLike))
+                    offenders.Add($"{type.FullName}.{member.Name}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "[I3] public members with pointer types in the interop package:\n  " + string.Join("\n  ", offenders));
     }
 
     /// <summary>

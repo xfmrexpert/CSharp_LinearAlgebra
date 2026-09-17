@@ -48,17 +48,19 @@ live view keeps its storage alive, and use-after-free is unexpressible. Views
 carry a `Span<T>`, so the runtime is the last line of defence on every slice.
 The public assembly compiles with `AllowUnsafeBlocks=false` and
 `CheckForOverflowUnderflow=true`; every pointer lives in a second assembly,
-`Tensile.Kernels`, whose types are all `internal`. See
-`docs/security-design.md`; Phases 1–3 of it have landed.
+`Tensile.Kernels`, whose types are all `internal`. The BLIS binding is a
+third assembly and a separate package that references the core, never the
+reverse. See `docs/security-design.md`; Phases 1–4 of it have landed and the
+invariant suite is green.
 
 The three-layer architecture this file has described from the start now
-exists in full, as two assemblies:
+exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
 | Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate` |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, Blas1/2, exact norms, the `KernelEntry` seam |
-| Interop | `Tensile.Interop` (parked in the kernel assembly, internal) | The optional BLIS binding; Phase 4 gives it its own package |
+| Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
 The kernel assembly is reached only through `KernelEntry`, which takes
 `Operand`/`Target` (a span plus rows, columns, stride) and pins with `fixed`
@@ -83,8 +85,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/Operand.cs` | `Operand` / `Target`: span + shape, length-checked on construction |
 | `src/Tensile.Kernels/Alignment.cs` | Cache-line offset for pinned arrays; the one address read on the allocation path |
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
-| `src/Tensile.Kernels/Interop/Blis.cs` | Native `bli_dgemm` binding + dispatch/ABI queries; internal, pending Phase 4 |
-| `tests/Tensile.Tests/` | xunit.v3, 807 tests; `Invariants/` is the secure-by-design spec (1 still red: I8, closed by Phase 4); kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
+| `tests/Tensile.Tests/` | xunit.v3, 813 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |

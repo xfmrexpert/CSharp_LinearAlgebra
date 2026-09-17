@@ -13,14 +13,15 @@ namespace Tensile.Interop;
 /// check <see cref="Architecture"/> and <see cref="GemmKernelImplementation"/>
 /// before quoting any ratio.
 ///
-/// Parked in the kernel assembly, internal, because the public assembly no
-/// longer compiles unsafe code and this is the one path in the library that
-/// loads native code from a path read out of the environment. Phase 4 of
-/// docs/security-design.md moves it to its own opt-in package; until then the
-/// benchmarks and diagnostics reach it through InternalsVisibleTo and a
-/// consumer of the Tensile package cannot reach it at all.
+/// This is the one place in the Tensile family that loads native code, and it
+/// ships as its own package so that a consumer of the core never carries it.
+/// <see cref="TryLoad"/> honours the <c>TENSILE_BLIS_LIBRARY</c> environment
+/// variable, which means it will load whatever library the environment names:
+/// a benchmarking convenience for development machines, and the README says
+/// so. The pointer-taking product is internal, for the benchmarks that own
+/// native operands; the public one takes bound views.
 /// </summary>
-internal sealed unsafe class Blis : IDisposable
+public sealed unsafe class Blis : IDisposable
 {
     private nint _library;
     private readonly nint _gemm;
@@ -140,12 +141,51 @@ internal sealed unsafe class Blis : IDisposable
         return null;
     }
 
-    /// <summary>
-    /// C := beta*C + alpha*A*B through native BLIS, column-major with unit row
-    /// stride, matching the signature of the managed drivers.
-    /// </summary>
+    /// <summary>C := beta*C + alpha*A*B through native BLIS.</summary>
+    /// <param name="a">Left operand, m x k.</param>
+    /// <param name="b">Right operand, k x n.</param>
+    /// <param name="c">Destination, m x n. Overwritten.</param>
+    /// <param name="alpha">Scalar on the product.</param>
+    /// <param name="beta">Scalar on the existing contents of C.</param>
+    /// <exception cref="ArgumentException">The shapes are not conformable.</exception>
     /// <exception cref="ObjectDisposedException">The library has been unloaded.</exception>
     public void Multiply(
+        ReadOnlyMatrixView<double> a,
+        ReadOnlyMatrixView<double> b,
+        MatrixView<double> c,
+        double alpha = 1.0,
+        double beta = 0.0)
+    {
+        if (a.Columns != b.Rows)
+        {
+            throw new ArgumentException(
+                $"Inner dimensions disagree: A is {a.Rows}x{a.Columns}, B is {b.Rows}x{b.Columns}.", nameof(b));
+        }
+
+        if (c.Rows != a.Rows || c.Columns != b.Columns)
+        {
+            throw new ArgumentException(
+                $"Destination is {c.Rows}x{c.Columns}, expected {a.Rows}x{b.Columns}.", nameof(c));
+        }
+
+        // Pinned for exactly this call, as the kernel seam does. BLIS is
+        // synchronous (and held to one thread in the constructor), so no
+        // pointer outlives the fixed block.
+        fixed (double* pa = a.Buffer)
+        fixed (double* pb = b.Buffer)
+        fixed (double* pc = c.Buffer)
+        {
+            Multiply(a.Rows, b.Columns, a.Columns, alpha, pa, a.Stride, pb, b.Stride, beta, pc, c.Stride);
+        }
+    }
+
+    /// <summary>
+    /// C := beta*C + alpha*A*B through native BLIS, column-major with unit row
+    /// stride, matching the signature of the managed drivers. Internal: the
+    /// caller vouches for every extent.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The library has been unloaded.</exception>
+    internal void Multiply(
         int rows, int columns, int depth,
         double alpha, double* left, int leftStride,
         double* right, int rightStride,

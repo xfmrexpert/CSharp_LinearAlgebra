@@ -1,7 +1,7 @@
 # Tensile: secure-by-design proposal
 
-Status: **approved** — every recommendation in §11 accepted. Phases 1–3 of
-§10 have landed; Phase 4 is next. New functionality (Cholesky, `expm`, complex)
+Status: **approved** — every recommendation in §11 accepted. Phases 1–4 of
+§10 have landed; Phase 5 is next. New functionality (Cholesky, `expm`, complex)
 stays paused until §10 is complete.
 
 This document says what "secure" means for a dense linear algebra library,
@@ -505,7 +505,12 @@ red.
    into the safe assembly rather than down into the kernels; and the BLIS
    binding is parked, internal, in the kernel assembly until Phase 4, so the
    I8 test now checks both assemblies and stays honestly red.*
-4. **`Tensile.Interop.Blis` out to its own package.** I8 green.
+4. **`Tensile.Interop.Blis` out to its own package.** I8 green. *Done: the
+   invariant suite is fully green. The package references `Tensile`, never
+   the reverse, and a test asserts neither core assembly references it. Its
+   public product takes bound views and pins inside its own seam; the
+   pointer overload is internal to the benchmarks. The environment-variable
+   override stays, with the README warning §5.7 asked for.*
 5. **Allocator and limits.** I9 green.
 6. **CI hardening**: actions pinned to SHAs, `permissions: contents: read`,
    `packages.lock.json`, CodeQL job, scheduled fuzz job.

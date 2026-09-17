@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Tensile/Tensile.csproj" />
     <ProjectReference Include="../../src/Tensile.Kernels/Tensile.Kernels.csproj" />
+    <ProjectReference Include="../../src/Tensile.Interop.Blis/Tensile.Interop.Blis.csproj" />
   </ItemGroup>
 
 </Project>

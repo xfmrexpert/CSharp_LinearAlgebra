@@ -403,15 +403,23 @@ All four layers agreed on, plus one that falls out of the design.
 |---|---|---|
 | **Compiler** | `AllowUnsafeBlocks=false`; `CheckForOverflowUnderflow=true`; kernel types `internal`. Fails the build, not a test. | I4, I7 |
 | **Public-surface reflection test** | No public type or member in `Tensile` has a pointer type in its signature; the assembly has no `DllImport` and no reference to `NativeLibrary`; no public type implements `IDisposable` over native memory. Runs in the unit suite, so the guarantee cannot regress silently. | I3, I8 |
-| **Property tests over hostile inputs** | For every public entry point: `int.MaxValue`, `int.MinValue`, `-1`, `0`, and pairs whose product wraps (`65536×65536`, `46341×46341`). Assert: throws `ArgumentOutOfRangeException` or `ArgumentException`, never anything else; no partial write (sentinel-filled destination unchanged on throw); memory-checker clean under the test host. **Written first, against the invariants, before the refactor** — several will fail on today's code, and turning them green is the migration. | I1, I2, I5, I7, I9 |
+| **Property tests over hostile inputs** | For every public entry point: `int.MaxValue`, `int.MinValue`, `-1`, `0`, and pairs whose product wraps. Assert: succeeds or throws the `ArgumentException` family, never anything else — an `OverflowException` or `OutOfMemoryException` means the input got past validation; no partial write (sentinel-filled destination unchanged on throw). **Written first, against the invariants, before the refactor** — several fail on today's code, and turning them green is the migration. Two rules bound what can be in the suite: nothing may depend on the host's memory (shapes in the tens-of-gigabytes range behave differently under overcommit and are excluded), and nothing may corrupt memory on today's code (a test that overflows the heap is a crashed host, not a red test — so the clean-failing form of a defect is exercised and its corrupting form documented). | I1, I2, I5, I7, I9 |
 | **Continuous fuzzing** | SharpFuzz over `MatrixShape` construction, `Bind`, `Slice`, and the ergonomic entry points, run on a schedule (not per-PR), with the property-test cases as the seed corpus. Finds the pairs nobody enumerated. | I1, I2, I5, I7 |
 | **Static analysis** | CodeQL on a schedule; .NET analyzers at `AnalysisLevel=latest-all` with the unsafe-code rules as errors in the safe assembly. Weak on the arithmetic class that bit us, so it is a floor rather than the guarantee. | I3, I4 |
 | **Debug assertions** | Kernel-assembly entry points assert their preconditions (shape agreement, packed-panel extents, alignment) under `Debug`, compiled out of `Release`. Documents the contract executably. | I1 (kernel side) |
 | **By construction** | I6 has no test because it has no failure mode: there is no `Dispose` to race. This is the point. | I6 |
 
 The ordering matters: **the property tests come first.** They are the
-specification. They will be red against `main` today, and each phase of §10
+specification. They are red against `main` today, and each phase of §10
 turns some of them green.
+
+One limit, stated plainly: a test can only be written against a surface that
+compiles. Invariants about *behaviour of the existing API* and about the
+*shape of the public surface* (reflection) can be committed red now. Behavioural
+tests for types that do not yet exist — `MatrixShape`, `Bind`, `TensileLimits`
+— cannot; they arrive with those types in Phases 2 and 5, red-first within each
+phase. The reflection tests bridge the gap where they can (e.g. "`Matrix<T>` is
+not `IDisposable`" pins the Phase 2 storage decision today).
 
 ---
 

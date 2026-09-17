@@ -1,4 +1,3 @@
-using System.Runtime.Intrinsics.X86;
 using Tensile.Primitives;
 
 namespace Tensile;
@@ -20,6 +19,11 @@ namespace Tensile;
 /// <see cref="Shared"/> exists so the convenience API has something to use. It
 /// is the right default for ordinary code and the wrong one for a benchmark,
 /// where the lock and the shared buffers are measurement noise.
+///
+/// The workspace itself remains disposable because its packing buffers are
+/// native memory owned by the primitive layer. That is a Phase 3 concern; the
+/// matrices it operates on are not disposable and never were a lifetime risk
+/// through this type, since it holds no reference to them between calls.
 /// </summary>
 public sealed class Workspace : IDisposable
 {
@@ -82,7 +86,7 @@ public sealed class Workspace : IDisposable
     /// <param name="beta">Scalar on the existing contents of C. Zero overwrites rather than scales, so a C full of NaN still yields a finite result.</param>
     /// <exception cref="ArgumentException">The shapes are not conformable.</exception>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    public unsafe void Multiply(
+    public void Multiply(
         ReadOnlyMatrixView<double> a,
         ReadOnlyMatrixView<double> b,
         MatrixView<double> c,
@@ -90,14 +94,16 @@ public sealed class Workspace : IDisposable
         double beta = 0.0)
     {
         if (a.Columns != b.Rows)
+        {
             throw new ArgumentException(
                 $"Inner dimensions disagree: A is {a.Rows}x{a.Columns}, B is {b.Rows}x{b.Columns}.", nameof(b));
+        }
 
         if (c.Rows != a.Rows || c.Columns != b.Columns)
+        {
             throw new ArgumentException(
                 $"Destination is {c.Rows}x{c.Columns}, expected {a.Rows}x{b.Columns}.", nameof(c));
-
-        int m = a.Rows, n = b.Columns, k = a.Columns;
+        }
 
         lock (_gate)
         {
@@ -106,16 +112,13 @@ public sealed class Workspace : IDisposable
             switch (_kernel)
             {
                 case Kernel.Avx512:
-                    dispatch.Multiply<Avx512Kernel16x8>(m, n, k, alpha, a.Pointer, a.Stride,
-                        b.Pointer, b.Stride, beta, c.Pointer, c.Stride);
+                    KernelEntry.Multiply<Avx512Kernel16x8>(dispatch, a, b, c, alpha, beta);
                     break;
                 case Kernel.Avx2:
-                    dispatch.Multiply<Avx2Kernel8x6>(m, n, k, alpha, a.Pointer, a.Stride,
-                        b.Pointer, b.Stride, beta, c.Pointer, c.Stride);
+                    KernelEntry.Multiply<Avx2Kernel8x6>(dispatch, a, b, c, alpha, beta);
                     break;
                 default:
-                    dispatch.Multiply<ScalarKernel4x4>(m, n, k, alpha, a.Pointer, a.Stride,
-                        b.Pointer, b.Stride, beta, c.Pointer, c.Stride);
+                    KernelEntry.Multiply<ScalarKernel4x4>(dispatch, a, b, c, alpha, beta);
                     break;
             }
         }
@@ -125,18 +128,19 @@ public sealed class Workspace : IDisposable
     /// Factor <paramref name="a"/> in place as P*A = L*U. The caller's storage
     /// is overwritten with the packed factors.
     ///
-    /// This is the zero-copy counterpart to
-    /// <see cref="MatrixOperations.FactorLu"/>, which copies so the caller's
-    /// matrix survives. Use this one when the input is already scratch.
+    /// Internal for now: the returned <see cref="LuFactorization"/> keeps a
+    /// pointer into <paramref name="a"/>'s buffer after this returns, which is
+    /// sound only over memory that never moves. <see cref="LuDecomposition"/>
+    /// satisfies that by owning a pinned <see cref="Matrix{T}"/>; a public
+    /// caller binding an arbitrary span could not be held to it. The public
+    /// factor-in-place path returns in Phase 3, when the factorization is
+    /// re-plumbed to hold no pointer.
     /// </summary>
-    /// <param name="a">The matrix to factor, overwritten with the packed factors.</param>
+    /// <param name="a">The matrix to factor, overwritten with the packed factors. Must be backed by non-movable memory.</param>
     /// <param name="blockSize">Panel width; zero selects the default.</param>
-    /// <returns>
-    /// The pivot array and diagnostics, which must be disposed. It does not own
-    /// the factors, so <paramref name="a"/> must outlive it.
-    /// </returns>
+    /// <returns>The pivot array and diagnostics, which must be disposed. It does not own the factors.</returns>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    public unsafe LuFactorization FactorLu(MatrixView<double> a, int blockSize = 0)
+    internal LuFactorization FactorLu(MatrixView<double> a, int blockSize = 0)
     {
         lock (_gate)
         {
@@ -145,9 +149,9 @@ public sealed class Workspace : IDisposable
 
             return _kernel switch
             {
-                Kernel.Avx512 => Lu.Factor<Avx512Kernel16x8>(a.Rows, a.Columns, a.Pointer, a.Stride, dispatch, nb),
-                Kernel.Avx2 => Lu.Factor<Avx2Kernel8x6>(a.Rows, a.Columns, a.Pointer, a.Stride, dispatch, nb),
-                _ => Lu.Factor<ScalarKernel4x4>(a.Rows, a.Columns, a.Pointer, a.Stride, dispatch, nb),
+                Kernel.Avx512 => KernelEntry.FactorLu<Avx512Kernel16x8>(dispatch, a, nb),
+                Kernel.Avx2 => KernelEntry.FactorLu<Avx2Kernel8x6>(dispatch, a, nb),
+                _ => KernelEntry.FactorLu<ScalarKernel4x4>(dispatch, a, nb),
             };
         }
     }

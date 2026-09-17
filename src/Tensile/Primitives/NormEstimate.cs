@@ -143,7 +143,21 @@ public static unsafe class NormEstimate
         // iteration, so fewer than two iterations cannot terminate meaningfully.
         int itmax = Math.Max(maxIterations, 2);
 
-        int panel = n * t;
+        // n * t is the probe panel. Computed in long and checked: with an
+        // operator free to report any Order, n = t = 65536 wraps the int
+        // product to exactly zero, a zero-length buffer comes back, and the
+        // estimator then writes 2^32 doubles into it. Rejecting here is I2/I7.
+        long panelExtent = (long)n * t;
+
+        if (panelExtent > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(columns),
+                $"An order-{n} operator with {t} probe columns needs a {panelExtent}-element panel, "
+                + $"which exceeds the {int.MaxValue} a buffer can address.");
+        }
+
+        int panel = (int)panelExtent;
 
         double* x = Alloc(panel);
         double* y = Alloc(panel);
@@ -394,8 +408,16 @@ public static unsafe class NormEstimate
         return sum;
     }
 
-    private static double* Alloc(int count) =>
-        (double*)NativeMemory.AlignedAlloc((nuint)count * sizeof(double), 64);
+    private static double* Alloc(int count)
+    {
+        // A negative count would sign-extend to an absurd nuint and be
+        // reported as an allocation failure, which is the wrong diagnosis for
+        // an argument error. Every caller has already validated, so this is a
+        // guard against the next caller that does not.
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        return (double*)NativeMemory.AlignedAlloc((nuint)count * sizeof(double), 64);
+    }
 }
 
 /// <summary>

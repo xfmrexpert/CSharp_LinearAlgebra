@@ -9,13 +9,16 @@ namespace Tensile;
 /// Every method here has a counterpart on <see cref="Workspace"/> or an
 /// <c>...InPlace</c> form that writes into storage the caller already owns.
 /// This layer is the convenient one, not the efficient one — a loop that calls
-/// <see cref="Multiply(Matrix{double}, ReadOnlyMatrixView{double}, Workspace?)"/>
-/// allocates a matrix per iteration.
+/// <see cref="Multiply"/> allocates a matrix per iteration.
 ///
 /// Arithmetic is supplied for <see cref="double"/> only. The extension target
 /// is the closed type <c>Matrix&lt;double&gt;</c> rather than an open
 /// <c>Matrix&lt;T&gt;</c>, so adding a numeric type later adds overloads
 /// without changing any signature here.
+///
+/// No method here touches a pointer. Anything that needs one goes through
+/// <see cref="KernelEntry"/>, which pins a view for exactly the duration of a
+/// call.
 /// </summary>
 public static class MatrixOperations
 {
@@ -30,17 +33,8 @@ public static class MatrixOperations
         ArgumentNullException.ThrowIfNull(a);
 
         var result = new Matrix<double>(a.Rows, b.Columns);
-
-        try
-        {
-            (workspace ?? Workspace.Shared).Multiply(a.ReadOnlyView, b, result.View);
-            return result;
-        }
-        catch
-        {
-            result.Dispose();
-            throw;
-        }
+        (workspace ?? Workspace.Shared).Multiply(a.ReadOnlyView, b, result.View);
+        return result;
     }
 
     /// <summary>
@@ -68,9 +62,8 @@ public static class MatrixOperations
     }
 
     /// <summary>
-    /// Factor as P*A = L*U, leaving <paramref name="a"/> untouched.
-    ///
-    /// The returned object owns a copy of the factors and must be disposed.
+    /// Factor as P*A = L*U, leaving <paramref name="a"/> untouched. The result
+    /// owns a copy of the factors.
     /// </summary>
     /// <param name="a">The matrix to factor. Not modified.</param>
     /// <param name="blockSize">Panel width; zero selects the default. The optimum shifts with size.</param>
@@ -86,18 +79,13 @@ public static class MatrixOperations
         // condition estimation later cannot be given the wrong norm.
         double oneNorm = a.OneNorm();
 
+        // The copy is a Matrix, so its storage is pinned for its lifetime --
+        // which is what makes it sound for the factorization to keep a pointer
+        // into it. See Workspace.FactorLu.
         Matrix<double> factors = a.Clone();
+        LuFactorization factorization = active.FactorLu(factors.View, blockSize);
 
-        try
-        {
-            LuFactorization factorization = active.FactorLu(factors.View, blockSize);
-            return new LuDecomposition(factors, factorization, oneNorm);
-        }
-        catch
-        {
-            factors.Dispose();
-            throw;
-        }
+        return new LuDecomposition(factors, factorization, oneNorm);
     }
 
     /// <summary>
@@ -121,47 +109,43 @@ public static class MatrixOperations
         if (!a.IsSquare)
             throw new ArgumentException($"Solve requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
 
-        using LuDecomposition lu = a.FactorLu(workspace: workspace);
-        return lu.Solve(b);
+        return a.FactorLu(workspace: workspace).Solve(b);
     }
 
     /// <summary>||A||_1, the largest absolute column sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static unsafe double OneNorm(this ReadOnlyMatrixView<double> a) =>
-        Norms.One(a.Rows, a.Columns, a.Pointer, a.Stride);
+    public static double OneNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.OneNorm(a);
 
     /// <summary>||A||_1, the largest absolute column sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double OneNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return a.ReadOnlyView.OneNorm();
+        return KernelEntry.OneNorm(a.ReadOnlyView);
     }
 
     /// <summary>||A||_inf, the largest absolute row sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static unsafe double InfinityNorm(this ReadOnlyMatrixView<double> a) =>
-        Norms.Infinity(a.Rows, a.Columns, a.Pointer, a.Stride);
+    public static double InfinityNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.InfinityNorm(a);
 
     /// <summary>||A||_inf, the largest absolute row sum. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double InfinityNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return a.ReadOnlyView.InfinityNorm();
+        return KernelEntry.InfinityNorm(a.ReadOnlyView);
     }
 
     /// <summary>||A||_F, the square root of the sum of squares. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
-    public static unsafe double FrobeniusNorm(this ReadOnlyMatrixView<double> a) =>
-        Norms.Frobenius(a.Rows, a.Columns, a.Pointer, a.Stride);
+    public static double FrobeniusNorm(this ReadOnlyMatrixView<double> a) => KernelEntry.FrobeniusNorm(a);
 
     /// <summary>||A||_F, the square root of the sum of squares. Exact, O(m*n).</summary>
     /// <param name="a">The matrix to measure.</param>
     public static double FrobeniusNorm(this Matrix<double> a)
     {
         ArgumentNullException.ThrowIfNull(a);
-        return a.ReadOnlyView.FrobeniusNorm();
+        return KernelEntry.FrobeniusNorm(a.ReadOnlyView);
     }
 
     /// <summary>
@@ -182,15 +166,14 @@ public static class MatrixOperations
     /// <param name="power">How many times to apply A. At least 1.</param>
     /// <param name="columns">Probe columns; more costs more products and estimates better.</param>
     /// <exception cref="ArgumentException">The matrix is not square.</exception>
-    public static unsafe double EstimateOneNorm(this Matrix<double> a, int power = 1, int columns = NormEstimate.DefaultColumns)
+    public static double EstimateOneNorm(this Matrix<double> a, int power = 1, int columns = NormEstimate.DefaultColumns)
     {
         ArgumentNullException.ThrowIfNull(a);
 
         if (!a.IsSquare)
             throw new ArgumentException($"Norm estimation requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
 
-        MatrixView<double> view = a.View;
-        return NormEstimate.OfMatrix(a.Rows, view.Pointer, view.Stride, power, columns).Value;
+        return KernelEntry.EstimateOneNorm(a.ReadOnlyView, power, columns).Value;
     }
 }
 
@@ -213,17 +196,8 @@ public static class StructuredSolveExtensions
         where TStructure : ITriangularStructure
     {
         var x = Matrix.From(b);
-
-        try
-        {
-            a.SolveInPlace(x.View);
-            return x;
-        }
-        catch
-        {
-            x.Dispose();
-            throw;
-        }
+        a.SolveInPlace(x.View);
+        return x;
     }
 
     /// <summary>Solve A*X = B by substitution, overwriting <paramref name="b"/> with X.</summary>
@@ -249,17 +223,8 @@ public static class StructuredSolveExtensions
         where TStructure : ITriangularStructure
     {
         var x = Matrix.From(b);
-
-        try
-        {
-            a.SolveTransposedInPlace(x.View);
-            return x;
-        }
-        catch
-        {
-            x.Dispose();
-            throw;
-        }
+        a.SolveTransposedInPlace(x.View);
+        return x;
     }
 
     /// <summary>Solve A^T*X = B by substitution, overwriting <paramref name="b"/> with X.</summary>
@@ -279,11 +244,12 @@ public static class StructuredSolveExtensions
         where TStructure : ITriangularStructure
     {
         if (a.Rows != a.Columns)
+        {
             throw new ArgumentException(
                 $"A {TStructure.Name} solve requires a square operand, got {a.Rows}x{a.Columns}.", nameof(a));
+        }
 
         if (b.Rows != a.Rows)
-            throw new ArgumentException(
-                $"Right-hand side has {b.Rows} rows, expected {a.Rows}.", nameof(b));
+            throw new ArgumentException($"Right-hand side has {b.Rows} rows, expected {a.Rows}.", nameof(b));
     }
 }

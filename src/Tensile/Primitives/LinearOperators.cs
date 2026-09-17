@@ -109,9 +109,20 @@ public sealed unsafe class DenseMatrixOperator : ILinearOperator, IDisposable
     {
         if (_work is not null && t <= _workColumns) return;
 
+        // Checked in long before it reaches the allocator: n * t * 8 can wrap
+        // nuint for large n and t, and a wrapped size that happens to be small
+        // is a heap overflow waiting for the first write.
+        long elements = (long)_n * t;
+
+        if (elements > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(t), $"An order-{_n} operator with {t} columns needs a {elements}-element work buffer.");
+        }
+
         if (_work is not null) NativeMemory.AlignedFree(_work);
 
-        _work = (double*)NativeMemory.AlignedAlloc((nuint)_n * (nuint)t * sizeof(double), 64);
+        _work = (double*)NativeMemory.AlignedAlloc((nuint)elements * sizeof(double), 64);
         _workColumns = t;
     }
 

@@ -1,89 +1,107 @@
 using System.Numerics;
-using System.Runtime.InteropServices;
 
 namespace Tensile;
 
 /// <summary>
 /// A dense column-major matrix that owns its storage.
 ///
-/// Storage is native and 64-byte aligned rather than a <c>T[]</c>, for two
-/// reasons: the micro-kernels issue aligned vector loads against it, and native
-/// memory does not move, so a <see cref="MatrixView{T}"/> handed to a kernel
-/// stays valid without pinning. The cost is that instances are disposable and a
-/// dropped reference leaks until finalization.
+/// Storage is a managed array on the pinned object heap, obtained with
+/// <c>GC.AllocateArray(..., pinned: true)</c>, and padded so that the first
+/// element sits on a 64-byte boundary. That choice does three things at once:
+///
+/// - The array never moves, so a view of it can be handed to a kernel without
+///   further pinning and the aligned start stays aligned.
+/// - A <see cref="Span{T}"/> over a managed array is a reference the garbage
+///   collector tracks. While any <see cref="MatrixView{T}"/> of this matrix is
+///   live on any thread's stack, the storage cannot be reclaimed. Use-after-free
+///   is not prevented here; it is unexpressible.
+/// - There is nothing to dispose. No <c>IDisposable</c>, no finalizer, no
+///   double-free, no leak when a caller forgets. The storage is reclaimed when
+///   the last reference to it is gone, like any other array.
 ///
 /// The type is generic so that storage, views, slicing and the structure
 /// vocabulary are written once. Arithmetic is currently supplied only for
 /// <see cref="double"/>, through extension methods on the closed type, which is
-/// why <c>Matrix&lt;float&gt;</c> will compile and hold data but has nothing to
-/// multiply it with yet. Adding a numeric type is then additive: the signatures
-/// here do not change.
+/// why <c>Matrix&lt;float&gt;</c> compiles and holds data but has nothing to
+/// multiply it with yet.
+///
+/// A pinned array is never compacted, so a hot loop that creates thousands of
+/// tiny matrices will fragment the heap. For a solver holding a handful of large
+/// operands this is the behaviour you want; for churn, reuse storage through a
+/// <see cref="Workspace"/> and views instead.
 /// </summary>
 /// <typeparam name="T">Element type.</typeparam>
-public sealed unsafe class Matrix<T> : IDisposable where T : unmanaged, INumberBase<T>
+public sealed class Matrix<T> where T : unmanaged, INumberBase<T>
 {
-    private T* _data;
+    private readonly T[] _storage;
+    private readonly int _offset;
 
     /// <summary>Allocate a zeroed matrix.</summary>
     /// <param name="rows">Row count.</param>
     /// <param name="columns">Column count.</param>
-    /// <param name="stride">
-    /// Column stride. Zero means "packed", that is equal to
-    /// <paramref name="rows"/>. A larger value leaves padding between columns,
-    /// which is mainly useful for reproducing a caller's layout or for testing
-    /// that operations respect stride.
-    /// </param>
-    /// <exception cref="ArgumentOutOfRangeException">A dimension is negative, or the stride is below the row count.</exception>
+    /// <param name="stride">Column stride; zero means packed.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The shape is invalid or too large to own. See <see cref="MatrixShape"/>.</exception>
     public Matrix(int rows, int columns, int stride = 0)
+        : this(new MatrixShape(rows, columns, stride))
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(rows);
-        ArgumentOutOfRangeException.ThrowIfNegative(columns);
-
-        if (stride == 0) stride = rows;
-        ArgumentOutOfRangeException.ThrowIfLessThan(stride, rows);
-
-        Rows = rows;
-        Columns = columns;
-        Stride = stride;
-
-        nuint count = Math.Max(1, (nuint)stride * (nuint)columns);
-        _data = (T*)NativeMemory.AlignedAlloc(count * (nuint)sizeof(T), 64);
-        new Span<T>(_data, checked((int)count)).Clear();
     }
 
+    /// <summary>Allocate a zeroed matrix of the given shape.</summary>
+    /// <param name="shape">The shape, already validated.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The shape is valid but too large to own: the extent plus alignment
+    /// padding exceeds <see cref="Array.MaxLength"/>. A shape that large can
+    /// still be bound to a caller's own span.
+    /// </exception>
+    public Matrix(MatrixShape shape)
+    {
+        int padding = Alignment.PaddingElements<T>();
+
+        // MatrixShape guarantees the extent fits int, which is the span limit.
+        // An array has a slightly lower limit, and we need room to align, so
+        // the owning type applies the stricter check. Computed in long; this is
+        // the last integer comparison before the allocator, and it must not be
+        // the one that wraps.
+        if ((long)shape.RequiredExtent + padding > Array.MaxLength)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(shape),
+                $"A {shape} matrix needs {shape.RequiredExtent} elements plus {padding} for alignment, "
+                + $"which exceeds the {Array.MaxLength} an array can hold. Bind a caller-owned span instead.");
+        }
+
+        Shape = shape;
+        _storage = GC.AllocateArray<T>(shape.RequiredExtent + padding, pinned: true);
+        _offset = Alignment.AlignedOffset(_storage);
+    }
+
+    /// <summary>The dimensions of this matrix.</summary>
+    public MatrixShape Shape { get; }
+
     /// <summary>Row count.</summary>
-    public int Rows { get; }
+    public int Rows => Shape.Rows;
 
     /// <summary>Column count.</summary>
-    public int Columns { get; }
+    public int Columns => Shape.Columns;
 
     /// <summary>Distance in elements between the starts of consecutive columns.</summary>
-    public int Stride { get; }
+    public int Stride => Shape.Stride;
 
     /// <summary>Whether the matrix has no elements.</summary>
-    public bool IsEmpty => Rows == 0 || Columns == 0;
+    public bool IsEmpty => Shape.IsEmpty;
 
     /// <summary>Whether the matrix is square, and so a candidate for solving and factorization.</summary>
-    public bool IsSquare => Rows == Columns;
+    public bool IsSquare => Shape.IsSquare;
 
     /// <summary>Element (<paramref name="row"/>, <paramref name="column"/>), by reference.</summary>
-    /// <exception cref="ObjectDisposedException">The matrix has been disposed.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Either index is out of range.</exception>
     public ref T this[int row, int column] => ref View[row, column];
 
     /// <summary>A writable view over the whole matrix.</summary>
-    /// <exception cref="ObjectDisposedException">The matrix has been disposed.</exception>
-    public MatrixView<T> View
-    {
-        get
-        {
-            ObjectDisposedException.ThrowIf(_data is null, this);
-            return new MatrixView<T>(_data, Rows, Columns, Stride);
-        }
-    }
+    public MatrixView<T> View =>
+        MatrixView<T>.Bind(_storage.AsSpan(_offset, Shape.RequiredExtent), Shape);
 
     /// <summary>A read-only view over the whole matrix.</summary>
-    /// <exception cref="ObjectDisposedException">The matrix has been disposed.</exception>
     public ReadOnlyMatrixView<T> ReadOnlyView => View;
 
     /// <summary>One column as a span, which is contiguous and therefore free.</summary>
@@ -104,8 +122,8 @@ public sealed unsafe class Matrix<T> : IDisposable where T : unmanaged, INumberB
     /// Assert a structure without checking it, so that operations dispatch on
     /// it at compile time.
     ///
-    /// This is an instance method rather than an extension so the element type
-    /// comes from the receiver and only the structure has to be named:
+    /// An instance method rather than an extension so the element type comes
+    /// from the receiver and only the structure has to be named:
     /// <c>a.As&lt;UpperTriangular&gt;()</c>. C# has no partial inference for
     /// explicit type arguments, so an extension would force both to be written
     /// out at every call.
@@ -133,16 +151,6 @@ public sealed unsafe class Matrix<T> : IDisposable where T : unmanaged, INumberB
 
     /// <summary>The elements in column-major order, packed with no stride padding.</summary>
     public T[] ToArray() => View.ToArray();
-
-    /// <summary>Release the storage. Views taken from this matrix are invalid afterwards.</summary>
-    public void Dispose()
-    {
-        if (_data is not null) { NativeMemory.AlignedFree(_data); _data = null; }
-        GC.SuppressFinalize(this);
-    }
-
-    /// <summary>Releases the storage if <see cref="Dispose"/> was not called.</summary>
-    ~Matrix() => Dispose();
 
     /// <summary>A writable view over the whole matrix.</summary>
     /// <param name="matrix">The matrix to view.</param>
@@ -190,12 +198,18 @@ public static class Matrix
     public static Matrix<T> FromColumnMajor<T>(int rows, int columns, ReadOnlySpan<T> values)
         where T : unmanaged, INumberBase<T>
     {
+        // Validate the shape first, so a hostile dimension is reported as such
+        // rather than as a count mismatch against a product that wrapped.
+        var shape = new MatrixShape(rows, columns);
+
         if (values.Length != (long)rows * columns)
+        {
             throw new ArgumentException(
                 $"Expected {(long)rows * columns} values for a {rows}x{columns} matrix, got {values.Length}.",
                 nameof(values));
+        }
 
-        var matrix = new Matrix<T>(rows, columns);
+        var matrix = new Matrix<T>(shape);
         for (int j = 0; j < columns; j++) values.Slice(j * rows, rows).CopyTo(matrix.Column(j));
         return matrix;
     }

@@ -68,10 +68,9 @@ public class LuBenchmarks : IDisposable
     /// <summary>Release the operands and workspace.</summary>
     public void Dispose()
     {
-        _original?.Dispose();
+        // The matrices are GC-owned; dropping the references is the whole
+        // cleanup. Only the workspace holds native buffers.
         _original = null;
-
-        _work?.Dispose();
         _work = null;
 
         _workspace?.Dispose();

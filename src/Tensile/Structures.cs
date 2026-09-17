@@ -91,12 +91,12 @@ public readonly struct UpperTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveUpper(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveUpper(a, b);
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveUpperTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveUpperTransposed(a, b);
 }
 
 /// <summary>
@@ -119,12 +119,12 @@ public readonly struct LowerTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLower(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLower(a, b);
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerTransposed(a, b);
 }
 
 /// <summary>
@@ -153,12 +153,12 @@ public readonly struct UnitLowerTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerUnit(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerUnit(a, b);
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerUnitTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerUnitTransposed(a, b);
 }
 
 /// <summary>

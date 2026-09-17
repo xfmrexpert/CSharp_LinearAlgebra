@@ -203,7 +203,7 @@ public static class Program
             {
                 for (int trial = 0; trial < 40; trial++)
                 {
-                    using var a = new Matrix<double>(n, n);
+                    var a = new Matrix<double>(n, n);
                     var rng = new Random(n * 1000 + trial);
 
                     for (int j = 0; j < n; j++)

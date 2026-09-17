@@ -23,6 +23,8 @@
          public surface, and are exactly where an off-by-one hides, so they are
          tested directly rather than only through their callers. -->
     <InternalsVisibleTo Include="Tensile.Tests" />
+    <InternalsVisibleTo Include="Tensile.Benchmarks" />
+    <InternalsVisibleTo Include="Tensile.Diagnostics" />
   </ItemGroup>
 
 </Project>

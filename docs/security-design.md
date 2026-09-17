@@ -1,7 +1,8 @@
 # Tensile: secure-by-design proposal
 
-Status: **proposal, awaiting sign-off.** No implementation until it is agreed.
-New functionality (Cholesky, `expm`, complex) is paused until this lands.
+Status: **approved** — every recommendation in §11 accepted. Phases 1 and 2 of
+§10 have landed; Phase 3 is next. New functionality (Cholesky, `expm`, complex)
+stays paused until §10 is complete.
 
 This document says what "secure" means for a dense linear algebra library,
 which guarantees Tensile will make, how the design makes each guarantee hold by
@@ -462,10 +463,10 @@ Each phase leaves the build green and the tests passing. Nothing is merged
 red.
 
 0. **Sign-off on this document**, and decisions on the open questions in §11.
-1. **Property-test suite**, written against §4, committed red. This is the
+1. **Property-test suite**, written against §4, committed red. *Done: 82 tests, 18 red.* This is the
    specification and the acceptance criterion for everything after.
 2. **`MatrixShape`; `Matrix<T>` on POH; views on `Span<T>`; pointer
-   constructor removed.** `Tensile` is still one assembly at this point.
+   constructor removed.** *Done: 18 red → 4; I1, I2, I5, I6, I7 green.* `Tensile` is still one assembly at this point.
    Several property tests go green here (I1, I2, I6, parts of I5).
 3. **Split `Tensile.Kernels`.** `AllowUnsafeBlocks=false` and
    `CheckForOverflowUnderflow=true` on `Tensile`; `KernelEntry` seam;

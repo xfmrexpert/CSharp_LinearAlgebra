@@ -22,21 +22,23 @@ public, and dropping down is a supported move rather than an escape hatch.
 ```csharp
 using Tensile;
 
-using var a = Matrix.FromRows(new[,]
+var a = Matrix.FromRows(new[,]
 {
     { 4.0, 1.0 },
     { 1.0, 3.0 },
 });
 
-using var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
+var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
 
-using Matrix<double> x = a.Solve(b);        // LU with partial pivoting
-using Matrix<double> product = a.Multiply(x);   // blocked GEMM
+Matrix<double> x = a.Solve(b);        // LU with partial pivoting
+Matrix<double> product = a.Multiply(x);   // blocked GEMM
 ```
 
-Everything that owns storage is `IDisposable`, because the storage is native
-rather than a `T[]`. Dropping a reference does not corrupt anything — the
-finalizer still frees — but it leaks until the next GC notices.
+Nothing here is `IDisposable`. A `Matrix<T>` owns a pinned managed array, and a
+view over it is a reference the garbage collector tracks, so storage lives
+exactly as long as anything can still reach it and is reclaimed like any other
+array. There is no lifetime to get wrong: no dispose-during-use, no double
+free, no leak from a forgotten `using`.
 
 ---
 
@@ -48,16 +50,33 @@ generic over `unmanaged, INumberBase<T>`, so `Matrix<float>` and
 `double`-only.
 
 ```csharp
-using var m = new Matrix<double>(rows: 100, columns: 40);
-using var z = Matrix.Zeros<double>(8, 8);
-using var i = Matrix.Identity<double>(8);
-using var f = Matrix.FromColumnMajor<double>(2, 2, [1, 2, 3, 4]);
+var m = new Matrix<double>(rows: 100, columns: 40);
+var z = Matrix.Zeros<double>(8, 8);
+var i = Matrix.Identity<double>(8);
+var f = Matrix.FromColumnMajor<double>(2, 2, [1, 2, 3, 4]);
 ```
 
 A **view** is a borrowed window. `MatrixView<T>` and `ReadOnlyMatrixView<T>` are
 `ref struct`s, so the compiler prevents them being stored in a field, boxed, or
 captured by an async method — the usual ways a borrowed pointer outlives its
 owner.
+
+There is no way to build a view from a raw pointer. A view comes either from a
+`Matrix<T>` or from **binding** a span to a `MatrixShape`, which checks that the
+span is long enough:
+
+```csharp
+var shape = new MatrixShape(rows: 3, columns: 4, stride: 5);   // validates, or throws
+double[] mine = new double[shape.RequiredExtent];              // (4-1)*5 + 3 = 18
+
+MatrixView<double> view = MatrixView<double>.Bind(mine, shape);   // zero-copy over your storage
+```
+
+`MatrixShape` is the one place shape arithmetic lives, computed in `long` with
+an explicit fit check — a shape whose extent would not fit an `int` cannot be
+constructed. If you genuinely have a `double*`, write `new Span<double>(p, len)`
+yourself: that is your `unsafe` block, correctly attributed, and it forces you to
+state the length, which is exactly the fact the library needs.
 
 ```csharp
 MatrixView<double> block = m.Slice(row: 10, column: 5, rows: 20, columns: 10);
@@ -89,10 +108,10 @@ confidently wrong answer. Here the shape is a type parameter, so the wrong
 choice does not compile and the right one is selected with no run-time branch.
 
 ```csharp
-using Matrix<double> u = BuildUpperTriangular();
+Matrix<double> u = BuildUpperTriangular();
 
 // Back substitution. No factorization, no branch, chosen at compile time.
-using Matrix<double> x = u.As<UpperTriangular>().Solve(b);
+Matrix<double> x = u.As<UpperTriangular>().Solve(b);
 ```
 
 Shipped structures:
@@ -111,7 +130,7 @@ say the rest is zero, and it cannot: LU packs `L` and `U` into one array, so the
 triangle a structure ignores routinely holds the other factor.
 
 ```csharp
-using LuDecomposition lu = a.FactorLu();
+LuDecomposition lu = a.FactorLu();
 
 lu.Lower.SolveInPlace(x.View);   // reads strictly below the diagonal
 lu.Upper.SolveInPlace(x.View);   // reads the diagonal and above
@@ -134,30 +153,21 @@ The safest structured matrices are the ones you never assert: `lu.Lower` and
 ## Factorizations
 
 ```csharp
-using LuDecomposition lu = a.FactorLu();     // a is not modified
+LuDecomposition lu = a.FactorLu();     // a is not modified
 
-using Matrix<double> x  = lu.Solve(b);
-using Matrix<double> xt = lu.SolveTransposed(b);
+Matrix<double> x  = lu.Solve(b);
+Matrix<double> xt = lu.SolveTransposed(b);
 
 bool broken   = lu.IsSingular;          // an exactly zero pivot
 double rcond  = lu.ReciprocalCondition();
 double det    = lu.Determinant();
 ```
 
-`FactorLu` copies, so your matrix survives. When the input is already scratch,
-factor in place instead and skip the copy:
-
-```csharp
-using Tensile;
-using Tensile.Primitives;
-
-// Any matrix you do not need intact afterwards; it is overwritten with the
-// packed factors, and must outlive the factorization that indexes into it.
-using Matrix<double> scratch = a.Clone();
-using var workspace = new Workspace();
-
-using LuFactorization factorization = workspace.FactorLu(scratch.View);
-```
+`FactorLu` copies, so your matrix survives, and the result keeps its own
+storage alive for as long as you hold it. A zero-copy factor-in-place over
+caller-owned storage is coming with the kernel-assembly split; until then the
+copy is the only public route, and it is an O(n²) cost against an O(n³)
+factorization.
 
 Three things worth knowing:
 

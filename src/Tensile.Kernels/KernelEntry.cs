@@ -38,6 +38,11 @@ internal static unsafe class KernelEntry
         Require(a.Columns == b.Rows, "inner dimensions");
         Require(c.Rows == a.Rows && c.Columns == b.Columns, "destination shape");
 
+        // A destination with no elements has nothing to receive, however many
+        // columns it nominally has. (An empty inner dimension is different: C
+        // is real and still has to be scaled by beta, so it goes through.)
+        if (c.Rows == 0 || c.Columns == 0) return;
+
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
         fixed (double* pc = c.Data)
@@ -65,6 +70,7 @@ internal static unsafe class KernelEntry
     {
         RequireFactors(lu, factors);
         Require(b.Rows == lu.Rows, "right-hand side rows");
+        if (IsEmpty(b)) return;
 
         fixed (double* pf = factors.Data)
         fixed (double* pb = b.Data)
@@ -78,6 +84,7 @@ internal static unsafe class KernelEntry
     {
         RequireFactors(lu, factors);
         Require(b.Rows == lu.Rows, "right-hand side rows");
+        if (IsEmpty(b)) return;
 
         fixed (double* pf = factors.Data)
         fixed (double* pb = b.Data)
@@ -90,6 +97,7 @@ internal static unsafe class KernelEntry
     public static void SolveUpper(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -102,6 +110,7 @@ internal static unsafe class KernelEntry
     public static void SolveUpperTransposed(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -114,6 +123,7 @@ internal static unsafe class KernelEntry
     public static void SolveLower(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -126,6 +136,7 @@ internal static unsafe class KernelEntry
     public static void SolveLowerTransposed(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -138,6 +149,7 @@ internal static unsafe class KernelEntry
     public static void SolveLowerUnit(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -150,6 +162,7 @@ internal static unsafe class KernelEntry
     public static void SolveLowerUnitTransposed(Operand a, Target b)
     {
         RequireTriangular(a, b);
+        if (IsEmpty(b)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* pb = b.Data)
@@ -162,6 +175,7 @@ internal static unsafe class KernelEntry
     public static void MultiplyPanel(Operand a, Operand x, Target y)
     {
         RequirePanel(a, x, y);
+        if (IsEmpty(y)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* px = x.Data)
@@ -175,6 +189,7 @@ internal static unsafe class KernelEntry
     public static void MultiplyPanelTransposed(Operand a, Operand x, Target y)
     {
         RequirePanel(a, x, y);
+        if (IsEmpty(y)) return;
 
         fixed (double* pa = a.Data)
         fixed (double* px = x.Data)
@@ -187,6 +202,8 @@ internal static unsafe class KernelEntry
     /// <summary>||A||_1, the largest absolute column sum.</summary>
     public static double OneNorm(Operand a)
     {
+        if (IsEmpty(a)) return 0.0;
+
         fixed (double* pa = a.Data)
         {
             return Norms.One(a.Rows, a.Columns, pa, a.Stride);
@@ -196,6 +213,8 @@ internal static unsafe class KernelEntry
     /// <summary>||A||_inf, the largest absolute row sum.</summary>
     public static double InfinityNorm(Operand a)
     {
+        if (IsEmpty(a)) return 0.0;
+
         fixed (double* pa = a.Data)
         {
             return Norms.Infinity(a.Rows, a.Columns, pa, a.Stride);
@@ -205,6 +224,8 @@ internal static unsafe class KernelEntry
     /// <summary>||A||_F, the square root of the sum of squares.</summary>
     public static double FrobeniusNorm(Operand a)
     {
+        if (IsEmpty(a)) return 0.0;
+
         fixed (double* pa = a.Data)
         {
             return Norms.Frobenius(a.Rows, a.Columns, pa, a.Stride);
@@ -215,6 +236,15 @@ internal static unsafe class KernelEntry
     // them as argument errors. These are the seam's own preconditions,
     // restated so that a primitive can never be reached with operands that
     // disagree, whatever the caller above did.
+
+    /// <summary>
+    /// No elements, whatever the nominal column count. The kernels walk
+    /// columns, and a 0 x 2^31 operand would have them walk two billion
+    /// times over nothing; every entry point returns before that happens.
+    /// </summary>
+    private static bool IsEmpty(Operand a) => a.Rows == 0 || a.Columns == 0;
+
+    private static bool IsEmpty(Target a) => a.Rows == 0 || a.Columns == 0;
 
     private static void Require(bool condition, string what)
     {

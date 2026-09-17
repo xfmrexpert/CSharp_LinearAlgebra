@@ -52,8 +52,9 @@ The public assembly compiles with `AllowUnsafeBlocks=false` and
 third assembly and a separate package that references the core, never the
 reverse. Every allocation sized by a request goes through `Storage`, which
 refuses anything over `TensileLimits.MaxElements` before asking the runtime.
-See `docs/security-design.md`; Phases 1–5 of it have landed and the invariant
-suite is green.
+See `docs/security-design.md`; Phases 1–6 of it have landed and the invariant
+suite is green. CI pins every action to a commit SHA, restores in locked mode
+against committed `packages.lock.json`, runs CodeQL, and fuzzes nightly.
 
 The three-layer architecture this file has described from the start now
 exists in full, as three assemblies:
@@ -89,7 +90,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/Alignment.cs` | Cache-line offset for pinned arrays; the one address read on the allocation path |
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
-| `tests/Tensile.Tests/` | xunit.v3, 828 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
+| `tests/Tensile.Tests/` | xunit.v3, 830 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -276,6 +278,18 @@ well- and ill-conditioned inputs.
     a human reads stdout" produces, and the reason `--verify-only` now returns
     an exit code and CI runs it.
 
+11. **An empty matrix can still have two billion columns.** `MatrixShape(0, n)`
+    is valid for any `n` up to `int.MaxValue` — its extent is zero — and every
+    loop of the form `for j < Columns` walked all of them to touch nothing.
+    `Matrix.FromColumnMajor<double>(0, 1_546_977_280, [])` took 36 seconds
+    from a 16-byte input. The property tests never caught it because they
+    enumerate hostile values one argument at a time and zero-with-huge is a
+    pair; the fuzzer found it within 90 seconds of its first run. Every
+    column walk in the public assembly and every kernel entry point now
+    returns first on an empty operand, and `EmptyShapeTests` pins it with a
+    generous time bound. The general lesson: validity and cost are different
+    questions, and an input that is valid can still be a denial of service.
+
 ---
 
 # Design decisions and why
@@ -407,9 +421,17 @@ than on things no BLAS-lineage library can express:
 dotnet test Tensile.slnx -c Release                        # unit suite
 dotnet run -c Release --project tools/Tensile.Diagnostics  # what this host supports
 ./disasm.sh                                                # kernel codegen gate
+dotnet tests/Tensile.Fuzz/bin/Release/net10.0/Tensile.Fuzz.dll --self-check   # seed corpus replay
 ```
 
-Three layers, deliberately overlapping:
+To fuzz locally: `apt install afl++`, `dotnet tool install -g SharpFuzz.CommandLine`,
+publish `tests/Tensile.Fuzz` twice (one copy to instrument with `sharpfuzz
+Tensile.dll`, one to replay findings on — instrumented code faults outside
+afl), then `AFL_SKIP_BIN_CHECK=1 afl-fuzz -i bin/Corpus -o findings -t 10000
+-m none -- dotnet bin/Tensile.Fuzz.dll`. Nothing from the instrumented
+assembly may run before `Fuzzer.OutOfProcess.Run` attaches the coverage map.
+
+Four layers, deliberately overlapping:
 
 - **The xunit suite** (`tests/Tensile.Tests`) is the regression net. Every
   contract generic over the micro-kernel runs once per kernel, via an abstract
@@ -422,6 +444,10 @@ Three layers, deliberately overlapping:
   numbers worth reporting rather than asserting.
 - **`disasm.sh`** is the codegen gate, and the one CI job no test can replace:
   correctness is unaffected by a spill, only speed is.
+- **The fuzz harness** (`tests/Tensile.Fuzz`) finds the argument *pairs* the
+  property tests did not enumerate. It found finding 11 in its first 90
+  seconds. A hang is a finding as much as a crash is: the property is "returns
+  or throws a documented exception", and "returns after 36 seconds" fails it.
 
 Guidance that has already been paid for once:
 

@@ -1,0 +1,21 @@
+# Actions are pinned to commit SHAs in the workflows (a tag can be moved; a
+# commit cannot), and packages restore against committed lock files. Both
+# would otherwise rot in place, so Dependabot proposes the bumps as ordinary
+# pull requests where the diff -- and the CI run against it -- can be read.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ["*"]

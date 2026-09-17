@@ -154,13 +154,23 @@ public sealed class Matrix<T> where T : unmanaged, INumberBase<T>
     /// <summary>The elements in column-major order, packed with no stride padding.</summary>
     public T[] ToArray() => View.ToArray();
 
-    /// <summary>A writable view over the whole matrix.</summary>
+    /// <summary>A writable view over the whole matrix; the same as <see cref="View"/>.</summary>
     /// <param name="matrix">The matrix to view.</param>
-    public static implicit operator MatrixView<T>(Matrix<T> matrix) => matrix.View;
+    /// <exception cref="ArgumentNullException">The matrix is null.</exception>
+    public static implicit operator MatrixView<T>(Matrix<T> matrix)
+    {
+        ArgumentNullException.ThrowIfNull(matrix);
+        return matrix.View;
+    }
 
-    /// <summary>A read-only view over the whole matrix.</summary>
+    /// <summary>A read-only view over the whole matrix; the same as <see cref="ReadOnlyView"/>.</summary>
     /// <param name="matrix">The matrix to view.</param>
-    public static implicit operator ReadOnlyMatrixView<T>(Matrix<T> matrix) => matrix.ReadOnlyView;
+    /// <exception cref="ArgumentNullException">The matrix is null.</exception>
+    public static implicit operator ReadOnlyMatrixView<T>(Matrix<T> matrix)
+    {
+        ArgumentNullException.ThrowIfNull(matrix);
+        return matrix.ReadOnlyView;
+    }
 }
 
 /// <summary>
@@ -212,6 +222,13 @@ public static class Matrix
         }
 
         var matrix = new Matrix<T>(shape);
+
+        // An empty matrix has nothing to copy, and a 0 x 2^31 one has two
+        // billion columns to not copy it into. Every column walk in the
+        // library short-circuits on IsEmpty for this reason; the fuzzer found
+        // the case as a 36-second hang.
+        if (shape.IsEmpty) return matrix;
+
         for (int j = 0; j < columns; j++) values.Slice(j * rows, rows).CopyTo(matrix.Column(j));
         return matrix;
     }
@@ -244,6 +261,8 @@ public static class Matrix
     public static Matrix<T> From<T>(ReadOnlyMatrixView<T> source) where T : unmanaged, INumberBase<T>
     {
         var matrix = new Matrix<T>(source.Rows, source.Columns);
+        if (source.IsEmpty) return matrix;
+
         for (int j = 0; j < source.Columns; j++) source.Column(j).CopyTo(matrix.Column(j));
         return matrix;
     }

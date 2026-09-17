@@ -15,6 +15,9 @@
 
     <Optimize>true</Optimize>
 
+    <!-- The recommended analyzer set, as errors. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
     <PackageId>Tensile.Interop.Blis</PackageId>
     <Description>Optional native BLIS binding for Tensile, used as a performance baseline. Loads libblis at run time; see README.</Description>
     <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>

@@ -33,6 +33,7 @@ dispatch, factorizations, norms, workspaces, and matrix-free operators.
 | `src/Tensile.Kernels` | The kernel assembly: micro-kernels, packing, GEMM, LU, triangular solves. All `internal`, all the library's unsafe code, reached through one pinning seam. |
 | `src/Tensile.Interop.Blis` | The optional native BLIS binding, a separate package. The only native code loading in the family; the core never references it. |
 | `tests/Tensile.Tests` | xunit suite. Contracts generic over the micro-kernel run once per supported kernel. |
+| `tests/Tensile.Fuzz` | SharpFuzz harness over the public surface, run nightly under afl++. |
 | `bench/Tensile.Benchmarks` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep. |
 | `tools/Tensile.Diagnostics` | `tensile-diag`: host ISA, BLIS dispatch, estimator accuracy. Also the single process the codegen gate drives. |
 | `disasm.sh` | Dumps micro-kernel codegen and fails on accumulator spills. |

@@ -6,10 +6,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The default token can do nothing but read the repository. Jobs that need
+# more (CodeQL uploads its results) ask for exactly that, on the job.
+permissions:
+  contents: read
+
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+# Every action below is pinned to a commit SHA, with the tag it was taken from
+# beside it. A tag can be moved to point at different code; a commit cannot.
+# Dependabot keeps the pins current (.github/dependabot.yml).
 
 jobs:
   test:
@@ -17,18 +26,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore Tensile.slnx
+        # Locked mode: the committed packages.lock.json files are authoritative,
+        # and a package graph that differs from them fails here rather than
+        # silently building something nobody reviewed.
+        run: dotnet restore Tensile.slnx --locked-mode
 
       - name: Build
-        # The library sets TreatWarningsAsErrors together with
-        # GenerateDocumentationFile, so an undocumented public member fails here.
+        # TreatWarningsAsErrors together with GenerateDocumentationFile and the
+        # analyzers (latest-all on the public assembly) all fail here.
         run: dotnet build Tensile.slnx -c Release --no-restore
 
       - name: Test
@@ -37,22 +51,33 @@ jobs:
       - name: Diagnostics
         # Prints which kernels this runner actually supports, which is the
         # context for reading the skipped tests above, and reports estimator
-        # accuracy by ensemble.
+        # accuracy by ensemble. Exits non-zero if a kernel disagrees with the
+        # reference.
         run: ./tools/Tensile.Diagnostics/bin/Release/net10.0/tensile-diag
+
+      - name: Fuzz corpus self-check
+        # The seed corpus replayed once through the harness. Cheap, and it
+        # keeps the harness compiling and the seeds honest between the nightly
+        # runs that actually mutate them.
+        run: dotnet tests/Tensile.Fuzz/bin/Release/net10.0/Tensile.Fuzz.dll --self-check
 
   codegen:
     name: Micro-kernel codegen
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Build diagnostics
-        run: dotnet build tools/Tensile.Diagnostics/Tensile.Diagnostics.csproj -c Release
+        run: |
+          dotnet restore tools/Tensile.Diagnostics/Tensile.Diagnostics.csproj --locked-mode
+          dotnet build tools/Tensile.Diagnostics/Tensile.Diagnostics.csproj -c Release --no-restore
 
       - name: Check for accumulator spills
         # RyuJIT's register allocator is shape-sensitive and fails silently: a
@@ -63,20 +88,55 @@ jobs:
 
       - name: Upload disassembly
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kernel-disassembly
           path: kernel.asm
           if-no-files-found: warn
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        # Built by hand rather than autobuild so the same solution and
+        # configuration CI tests is the one CodeQL reads.
+        run: |
+          dotnet restore Tensile.slnx --locked-mode
+          dotnet build Tensile.slnx -c Release --no-restore
+
+      - uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: /language:csharp
 
   benchmarks-build:
     name: Benchmarks build
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -85,4 +145,6 @@ jobs:
       # presented as data; the point here is only that the benchmarks still
       # build against the library.
       - name: Build
-        run: dotnet build bench/Tensile.Benchmarks/Tensile.Benchmarks.csproj -c Release
+        run: |
+          dotnet restore bench/Tensile.Benchmarks/Tensile.Benchmarks.csproj --locked-mode
+          dotnet build bench/Tensile.Benchmarks/Tensile.Benchmarks.csproj -c Release --no-restore

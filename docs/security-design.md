@@ -1,7 +1,8 @@
 # Tensile: secure-by-design proposal
 
-Status: **approved** — every recommendation in §11 accepted. Phases 1–5 of
-§10 have landed; Phase 6 is next. New functionality (Cholesky, `expm`, complex)
+Status: **approved** — every recommendation in §11 accepted. Phases 1–6 of
+§10 have landed; Phase 7 (re-measure, consumer-facing `docs/security.md`) is
+next. New functionality (Cholesky, `expm`, complex)
 stays paused until §10 is complete.
 
 This document says what "secure" means for a dense linear algebra library,
@@ -534,7 +535,15 @@ red.
    bounded by operands the caller already holds and sit outside the policy,
    as §5.9 now records.*
 6. **CI hardening**: actions pinned to SHAs, `permissions: contents: read`,
-   `packages.lock.json`, CodeQL job, scheduled fuzz job.
+   `packages.lock.json`, CodeQL job, scheduled fuzz job. *Done. Also:
+   `AnalysisLevel=latest-all` on `Tensile` with five rules switched off in
+   its `.editorconfig`, each with its reason; `latest-recommended` on the
+   other two assemblies; Dependabot for the pins and the lock files. The
+   fuzz harness's first local run found a real defect within 90 seconds
+   (CLAUDE.md finding 11): a 0 × 2³¹ matrix is valid and every column walk
+   took two billion steps to do nothing. That is T4 from a 16-byte input,
+   and neither the property tests nor the review saw it, which is the case
+   for the fuzzer made by the fuzzer.*
 7. **Re-measure on the 12700H** (§9). Update `CLAUDE.md`'s measured results
    and `docs/api.md`. Write `docs/security.md` as the consumer-facing statement
    of the guarantees in §4.

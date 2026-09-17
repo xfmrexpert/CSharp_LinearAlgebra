@@ -111,6 +111,9 @@ public static class NormEstimate
         double[] z = Storage.Array<double>(extent, panelPurpose);
         double[] h = Storage.Array<double>(n, vectorPurpose);
 
+        // Not a security use of randomness (CA5394 is off for this assembly,
+        // see .editorconfig): the signs only have to be uncorrelated with the
+        // matrix, and a fixed seed is what makes the estimate reproducible.
         var rng = new Random(seed);
         int[] order = Storage.Array<int>(n, vectorPurpose);
         int[] scratchOrder = Storage.Array<int>(n, vectorPurpose);

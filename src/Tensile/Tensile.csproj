@@ -17,6 +17,12 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
 
+    <!-- Every .NET analyzer rule, as errors (TreatWarningsAsErrors). The
+         handful this design deliberately contradicts are switched off in
+         this directory's .editorconfig, each with its reason. -->
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+
     <Optimize>true</Optimize>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <!-- Keep JIT inlining decisions from shifting between tiers while measuring. -->

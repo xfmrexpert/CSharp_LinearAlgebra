@@ -119,6 +119,9 @@ public readonly ref struct MatrixView<T> where T : unmanaged
                 nameof(destination));
         }
 
+        // Nothing to copy, and possibly billions of columns to not copy.
+        if (IsEmpty) return;
+
         // Column by column is not overlap-safe on its own: Span.CopyTo protects
         // each column, but if the windows overlap across columns, writing
         // destination column j can destroy source column j+1 before it is
@@ -147,6 +150,8 @@ public readonly ref struct MatrixView<T> where T : unmanaged
     /// <summary>Set every element of this window to <paramref name="value"/>.</summary>
     public void Fill(T value)
     {
+        if (IsEmpty) return;
+
         for (int j = 0; j < Columns; j++) Column(j).Fill(value);
     }
 
@@ -156,6 +161,8 @@ public readonly ref struct MatrixView<T> where T : unmanaged
     {
         // Rows * Columns is at most RequiredExtent, which fits int by I2.
         T[] result = Storage.Array<T>(Rows * Columns, $"a packed copy of a {Rows}x{Columns} window");
+
+        if (IsEmpty) return result;
 
         for (int j = 0; j < Columns; j++)
             Column(j).CopyTo(result.AsSpan(j * Rows, Rows));
@@ -243,6 +250,8 @@ public readonly ref struct ReadOnlyMatrixView<T> where T : unmanaged
     {
         // Rows * Columns is at most RequiredExtent, which fits int by I2.
         T[] result = Storage.Array<T>(Rows * Columns, $"a packed copy of a {Rows}x{Columns} window");
+
+        if (IsEmpty) return result;
 
         for (int j = 0; j < Columns; j++)
             Column(j).CopyTo(result.AsSpan(j * Rows, Rows));

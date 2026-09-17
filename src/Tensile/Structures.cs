@@ -83,6 +83,8 @@ public readonly struct UpperTriangular : ITriangularStructure
     /// <inheritdoc/>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = j + 1; i < a.Rows; i++)
                 if (a[i, j] != 0.0) return false;
@@ -111,6 +113,8 @@ public readonly struct LowerTriangular : ITriangularStructure
     /// <inheritdoc/>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = 0; i < Math.Min(j, a.Rows); i++)
                 if (a[i, j] != 0.0) return false;
@@ -145,6 +149,8 @@ public readonly struct UnitLowerTriangular : ITriangularStructure
     /// <param name="a">The matrix to inspect.</param>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = 0; i < Math.Min(j, a.Rows); i++)
                 if (a[i, j] != 0.0) return false;

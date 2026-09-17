@@ -109,6 +109,7 @@ public readonly ref struct MatrixView<T> where T : unmanaged
 
     /// <summary>Copy every element of this window into <paramref name="destination"/>.</summary>
     /// <exception cref="ArgumentException">The shapes differ.</exception>
+    /// <exception cref="AllocationLimitException">The windows overlap and a staging copy would exceed <see cref="TensileLimits.MaxElements"/>.</exception>
     public void CopyTo(MatrixView<T> destination)
     {
         if (destination.Rows != Rows || destination.Columns != Columns)
@@ -150,9 +151,11 @@ public readonly ref struct MatrixView<T> where T : unmanaged
     }
 
     /// <summary>Copy the window into a fresh column-major array, packed with no stride padding.</summary>
+    /// <exception cref="AllocationLimitException">The packed size exceeds <see cref="TensileLimits.MaxElements"/>.</exception>
     public T[] ToArray()
     {
-        var result = new T[(long)Rows * Columns];
+        // Rows * Columns is at most RequiredExtent, which fits int by I2.
+        T[] result = Storage.Array<T>(Rows * Columns, $"a packed copy of a {Rows}x{Columns} window");
 
         for (int j = 0; j < Columns; j++)
             Column(j).CopyTo(result.AsSpan(j * Rows, Rows));
@@ -235,9 +238,11 @@ public readonly ref struct ReadOnlyMatrixView<T> where T : unmanaged
     }
 
     /// <summary>Copy the window into a fresh column-major array, packed with no stride padding.</summary>
+    /// <exception cref="AllocationLimitException">The packed size exceeds <see cref="TensileLimits.MaxElements"/>.</exception>
     public T[] ToArray()
     {
-        var result = new T[(long)Rows * Columns];
+        // Rows * Columns is at most RequiredExtent, which fits int by I2.
+        T[] result = Storage.Array<T>(Rows * Columns, $"a packed copy of a {Rows}x{Columns} window");
 
         for (int j = 0; j < Columns; j++)
             Column(j).CopyTo(result.AsSpan(j * Rows, Rows));

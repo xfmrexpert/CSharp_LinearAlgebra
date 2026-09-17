@@ -1,7 +1,7 @@
 # Tensile: secure-by-design proposal
 
-Status: **approved** — every recommendation in §11 accepted. Phases 1–4 of
-§10 have landed; Phase 5 is next. New functionality (Cholesky, `expm`, complex)
+Status: **approved** — every recommendation in §11 accepted. Phases 1–5 of
+§10 have landed; Phase 6 is next. New functionality (Cholesky, `expm`, complex)
 stays paused until §10 is complete.
 
 This document says what "secure" means for a dense linear algebra library,
@@ -382,6 +382,19 @@ already fails cleanly — but it is what turns T4 from "the runtime will
 eventually throw `OutOfMemoryException`" into "the request is refused at the
 door with a clear message".
 
+As built: the path is `Storage` in the public assembly, with `Pinned<T>` for
+matrix storage and `Array<T>` for work; the only other `new T[]` in that
+assembly is inside `Storage` itself. The limit is measured against the
+caller's request (a matrix's required extent, a probe panel's n·t), not
+against the allocation after alignment padding, and per allocation rather than
+in total: an operation that allocates five panels is bounded five times, not
+once. Refusal is `AllocationLimitException` with `Requested` and `Limit`, a
+type of its own so a service can map it to "too large" and keep
+`OutOfMemoryException` for "in trouble". The kernel assembly allocates only
+work bounded by operands the caller already holds — a pivot array of
+min(m, n), a row-sum vector of m, packing buffers of block constants times m —
+and sits outside the policy by design.
+
 ### 5.10 Concurrency
 
 `Workspace` keeps its internal lock; the argument for it is unchanged. The one
@@ -511,7 +524,15 @@ red.
    public product takes bound views and pins inside its own seam; the
    pointer overload is internal to the benchmarks. The environment-variable
    override stays, with the README warning §5.7 asked for.*
-5. **Allocator and limits.** I9 green.
+5. **Allocator and limits.** I9 green. *Done. `Storage` is the one path;
+   `TensileLimits.MaxElements` defaults to `Array.MaxLength` per §11 item 3;
+   refusal is an `AllocationLimitException` carrying the request and the
+   limit, thrown before any memory is asked for and deliberately unrelated to
+   `OutOfMemoryException`. The limit is applied to the request, per
+   allocation, before padding; shape validity is checked first, so I2 still
+   answers for impossible shapes. The kernel assembly's own allocations are
+   bounded by operands the caller already holds and sit outside the policy,
+   as §5.9 now records.*
 6. **CI hardening**: actions pinned to SHAs, `permissions: contents: read`,
    `packages.lock.json`, CodeQL job, scheduled fuzz job.
 7. **Re-measure on the 12700H** (§9). Update `CLAUDE.md`'s measured results

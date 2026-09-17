@@ -284,6 +284,41 @@ argument. The estimator always satisfies both; another caller may not.
 
 ---
 
+## Limits
+
+Every allocation the library makes on your behalf — storage, a result, a work
+panel — goes through one path that checks the request against a process-wide
+ceiling first:
+
+```csharp
+TensileLimits.MaxElements = 50_000_000;      // refuse anything over 50M elements per allocation
+
+try
+{
+    var big = new Matrix<double>(10_000, 10_000);   // 100M elements
+}
+catch (AllocationLimitException e)
+{
+    Console.WriteLine($"{e.Requested} > {e.Limit}: {e.Message}");
+}
+```
+
+The default is `Array.MaxLength`, the runtime's own ceiling, which is to say no
+policy at all — a library should not guess your memory budget. Set it once at
+startup if you are a service that would rather refuse a 16 GB request than
+attempt it. `AllocationLimitException` is thrown *before* any memory is asked
+for and is deliberately unrelated to `OutOfMemoryException`: one means the
+library declined, the other means the runtime tried and failed, and you will
+want to handle them differently.
+
+The limit counts elements, not bytes, applies per allocation rather than in
+total, and measures what you asked for — a `40×40` matrix is 1600 elements
+whatever its alignment padding, though a stride larger than the row count does
+count. Shape validity is checked before policy, so an impossible shape is an
+`ArgumentException` under any limit.
+
+---
+
 ## Not here yet
 
 - **Complex**, which the transformer-winding application ultimately needs.

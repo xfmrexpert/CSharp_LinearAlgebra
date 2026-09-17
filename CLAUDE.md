@@ -50,8 +50,10 @@ The public assembly compiles with `AllowUnsafeBlocks=false` and
 `CheckForOverflowUnderflow=true`; every pointer lives in a second assembly,
 `Tensile.Kernels`, whose types are all `internal`. The BLIS binding is a
 third assembly and a separate package that references the core, never the
-reverse. See `docs/security-design.md`; Phases 1–4 of it have landed and the
-invariant suite is green.
+reverse. Every allocation sized by a request goes through `Storage`, which
+refuses anything over `TensileLimits.MaxElements` before asking the runtime.
+See `docs/security-design.md`; Phases 1–5 of it have landed and the invariant
+suite is green.
 
 The three-layer architecture this file has described from the start now
 exists in full, as three assemblies:
@@ -77,6 +79,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
 | `src/Tensile/LinearOperators.cs` | `ILinearOperator` over views (the public extension point), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
+| `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
 | `src/Tensile/LuDecomposition.cs` | Owning factorization; captures ||A||_1 before overwriting A |
@@ -86,7 +89,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/Alignment.cs` | Cache-line offset for pinned arrays; the one address read on the allocation path |
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
-| `tests/Tensile.Tests/` | xunit.v3, 813 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 828 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -333,9 +336,10 @@ well- and ill-conditioned inputs.
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small
   factorizations in parallel, where per-thread workspaces are the answer.
-- **`Matrix<T>` allocates native memory per instance and relies on disposal.**
-  A dropped reference leaks until finalization. A pooled allocator is the
-  obvious fix and is not written.
+- **Pinned-object-heap storage is never compacted.** A hot loop creating
+  thousands of tiny matrices fragments the POH. Fine for a solver holding a
+  handful of large operands; a pooled allocator behind `Storage` is the fix if
+  a churn-heavy workload ever appears, and is not written.
 - **No `SymmetricPositiveDefinite` structure**, because there is no Cholesky to
   dispatch to. This is the missing half of the type-system argument.
 

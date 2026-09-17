@@ -54,6 +54,7 @@ public sealed class Matrix<T> where T : unmanaged, INumberBase<T>
     /// padding exceeds <see cref="Array.MaxLength"/>. A shape that large can
     /// still be bound to a caller's own span.
     /// </exception>
+    /// <exception cref="AllocationLimitException">The extent exceeds <see cref="TensileLimits.MaxElements"/>.</exception>
     public Matrix(MatrixShape shape)
     {
         int padding = Alignment.PaddingElements<T>();
@@ -72,7 +73,7 @@ public sealed class Matrix<T> where T : unmanaged, INumberBase<T>
         }
 
         Shape = shape;
-        _storage = GC.AllocateArray<T>(shape.RequiredExtent + padding, pinned: true);
+        _storage = Storage.Pinned<T>(shape.RequiredExtent, padding, $"a {shape} matrix");
         _offset = Alignment.AlignedOffset(_storage);
     }
 

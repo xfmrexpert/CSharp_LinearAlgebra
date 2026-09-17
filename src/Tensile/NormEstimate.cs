@@ -56,6 +56,7 @@ public static class NormEstimate
     /// <param name="maxIterations">Iteration cap; at least 2 is used.</param>
     /// <param name="seed">Seed for the random starting probes.</param>
     /// <exception cref="ArgumentOutOfRangeException">The operator's order is negative, or the n x t probe panel would not fit a buffer.</exception>
+    /// <exception cref="AllocationLimitException">A probe panel would exceed <see cref="TensileLimits.MaxElements"/>.</exception>
     public static NormEstimateResult Of(
         ILinearOperator op,
         int columns = DefaultColumns,
@@ -95,19 +96,27 @@ public static class NormEstimate
         var panel = new MatrixShape(n, t);
         int extent = panel.RequiredExtent;
 
-        var x = new double[extent];
-        var y = new double[extent];
-        var s = new double[extent];
-        var sOld = new double[extent];
-        var z = new double[extent];
-        var h = new double[n];
+        // Five n x t panels and a handful of length-n vectors. The policy
+        // limit applies per allocation, so it is the panel that is measured
+        // against it; an operator whose order alone exceeded the limit could
+        // not have been built from a matrix, but a matrix-free one can report
+        // any order it likes.
+        string panelPurpose = $"an {n}x{t} probe panel";
+        string vectorPurpose = $"an order-{n} work vector";
+
+        double[] x = Storage.Array<double>(extent, panelPurpose);
+        double[] y = Storage.Array<double>(extent, panelPurpose);
+        double[] s = Storage.Array<double>(extent, panelPurpose);
+        double[] sOld = Storage.Array<double>(extent, panelPurpose);
+        double[] z = Storage.Array<double>(extent, panelPurpose);
+        double[] h = Storage.Array<double>(n, vectorPurpose);
 
         var rng = new Random(seed);
-        var order = new int[n];
-        var scratchOrder = new int[n];
-        var keys = new double[n];
-        var used = new bool[n];
-        var current = new int[t];
+        int[] order = Storage.Array<int>(n, vectorPurpose);
+        int[] scratchOrder = Storage.Array<int>(n, vectorPurpose);
+        double[] keys = Storage.Array<double>(n, vectorPurpose);
+        bool[] used = Storage.Array<bool>(n, vectorPurpose);
+        int[] current = Storage.Array<int>(t, vectorPurpose);
 
         InitialProbe(rng, n, t, x);
 

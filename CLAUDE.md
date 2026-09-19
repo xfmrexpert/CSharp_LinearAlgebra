@@ -112,27 +112,59 @@ native packed micro-kernel.
 
 ## Single-core GEMM: parity with BLIS
 
-Pinned with `taskset -c 0`, medians over 31 samples:
+Re-taken 2026-09-19 under BenchmarkDotNet, `taskset -c 0`, 31 iterations,
+GFLOP/s from the mean (medians agree within 1% at every size; BDN reported a
+median column for the managed side only). Within-run dispersion was 1.2-2.0%
+StdDev on both sides. AVX-512 is fused off on this part — `tensile-diag`
+reports `AVX-512F: False` — so the AVX2 8x6 kernel is what runs.
 
-| n | C# AVX2 8x6 | BLIS 1-thread | ratio |
-| --- | --- | --- | --- |
-| 256 | 51.95 | 55.81 | 93% |
-| 512 | 51.44 | 53.35 | 96% |
-| 1024 | 53.76 | 53.97 | 99.6% |
-| 2048 | 54.32 | 54.94 | 99% |
+| n | C# AVX2 8x6 | BLIS 1-thread | ratio | C# % of ceiling | BLIS % of ceiling |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 49.57 | 58.40 | 85% | 79% | 93% |
+| 256 | 54.27 | 55.81 | 97% | 86% | 88% |
+| 512 | 56.31 | 57.72 | 98% | 89% | 92% |
+| 1024 | 57.26 | 55.85 | **103%** | 91% | 89% |
+| 2048 | 57.22 | 57.39 | 99.7% | 91% | 91% |
 
-Kernel ceiling (L1-resident, no packing) 61.63 GFLOP/s; both implementations
-converge to ~88% of it, so the residual 12% is packing and memory traffic
-inherent to blocked GEMM, not codegen quality.
+Kernel ceiling (L1-resident, no packing, AVX2 8x6) 63.02 GFLOP/s; the scalar
+4x4 kernel manages 11.05. Both GEMM implementations converge to ~91% of the
+ceiling, so the residual ~9% is packing and memory traffic inherent to blocked
+GEMM, not codegen quality. For scale, one Golden Cove core at ~4.0 GHz has a
+64 GFLOP/s AVX2 FMA peak, so the micro-kernel is running at ~98% of what the
+hardware can issue.
 
-**Stated conservatively: parity within about +/-10%.** Run-to-run drift on the
-kernel ceiling alone was 6.6% (62.36 / 52.39 / 51.01 across runs), which is
-larger than most individual differences in the table.
+**The managed GEMM is at parity from n=256 up, and 3% ahead at n=1024.**
+That is the headline result of the whole project: the same algorithm, written
+in C# and compiled by RyuJIT, against hand-written assembly kernels in a
+mature native library, on the same core.
+
+Treat the ratio and not either column as the finding. Both sides came out
+faster than the previous recording (C# 51.9-54.3 -> 54.3-57.3, BLIS
+53.4-55.8 -> 55.8-57.7) on the same machine and the same BLIS build, which
+says cross-run conditions moved; within-run dispersion of 1-2% is much smaller
+than that drift. Note also that `GemmBenchmarks` allocates with `NativeMemory`
+and calls the dispatch directly, so none of this touches the POH storage or
+the validation seam — the improvement is not attributable to the
+secure-by-design work, and `ApiOverheadBenchmarks` is what measures that.
+
+**n=128 is the one place BLIS is clearly ahead** (85%), and it is also the
+size where the managed side is furthest from its own ceiling (79% against
+BLIS's 93%). The serial path still uses the placeholder MC=288, KC=384 — both
+larger than the entire 128x128 operand — which is the obvious suspect and
+exactly what `BlockSizeBenchmarks` sweeps.
 
 Note BLIS has no Alder Lake sub-configuration and falls back to its `haswell`
 config, whose double micro-kernel is 6x8 AVX2 assembly — the same geometry and
 ISA. So this is the same algorithm compiled two ways, which is exactly the
 comparison that was wanted.
+
+The `threaded` rows in that run are not a threading result and are not
+recorded: pinning to one core makes `ProcessorCount` 1, so they measure the
+parallel path's fork/join overhead against a single worker. That overhead is
+worth one number — 1-3% at n>=256, and exactly 0 at n=128, where
+`work = 2.1e6` falls below `ParallelThreshold` and the dispatch takes the
+serial path outright (confirmed by the threaded row allocating nothing at all
+at that size). Real scaling comes from `ThreadScalingBenchmarks`, unpinned.
 
 ## Threading: power-limited, not algorithm-limited
 

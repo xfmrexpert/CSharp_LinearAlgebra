@@ -208,38 +208,47 @@ which is a within-run comparison replicated in both directions, but it does
 mean absolute GFLOP/s are not comparable across benchmark classes in one
 sitting.
 
-## Threading: power-limited, not algorithm-limited
+## Threading: power-limited, and the baseline is a trap
 
-Best results at n=2048, each measured within its own run:
+Re-taken on the 12700H, 2026-09-19: unpinned (finding 6), root so BDN could
+raise priority, 31 iterations, `ParallelGemm` driven directly so the dispatch
+threshold cannot divert a row. GFLOP/s from medians.
 
-| Config | 1 thread | best | threads | speedup | per-thread efficiency |
-| --- | --- | --- | --- | --- | --- |
-| E-cores only (8) | 19.6 | 92.2 | 6 | 4.7x | 78% |
-| P-cores only (6) | 55.7 | 136.0 | 6 | 2.4x | 41% |
-| P + SMT (12) | 50.3 | 145.0 | 8 | 2.9x | 36% |
-| All 20 | 54.9 | 173.9 | 6 | 3.2x | — |
+| threads | n=512 | n=2048 |
+| --- | --- | --- |
+| 1 | 48.21 | 44.32 |
+| 2 | 87.72 | 86.49 |
+| 4 | 118.62 | 133.98 |
+| 6 | 133.42 | **170.65** |
+| 8 | **150.05** | 151.33 |
+| 12 | 136.61 | 145.81 |
+| 16 | 128.62 | 139.72 |
+| 20 | 121.79 | 142.25 |
 
-**The E-core result is the important one.** 4.7x on 6 threads at 78%
-per-thread efficiency proves the parallel structure scales when the hardware is
-not power-constrained. Same code, same block sizes, same barriers as the
-P-cores managing 41%.
+Peak 170.65 GFLOP/s at 6 threads (n=2048) and 150.05 at 8 (n=512), then a
+17-19% decline out to 20 threads. The peak location and magnitude replicate
+the earlier campaign (which also peaked at 6 threads, at 173.9), so
+**~150-175 GFLOP/s at 6-8 threads is this machine, twice measured.**
 
-Evidence the limit is package power, not software:
-- P-only 6 threads = 22.7 GFLOP/s per core, implying ~1.42 GHz effective
-  against ~3.9 GHz implied by the single-core ceiling.
-- P alone (136) + E alone (92) = 228, but together only 174. The parts do not
-  add.
-- Within one run, n=512 gives 160.3 but n=2048 gives 136.0 — larger problems
-  should be more efficient; the difference is sustained-load duration.
+**The 1-thread row is not a valid baseline and speedups quoted against it are
+inflated.** Unpinned, a `Parallel.For` with `MaxDegreeOfParallelism = 1` is
+scheduled wherever the OS likes, including onto a Gracemont E-core — and the
+n=2048 1-thread row has the worst dispersion in the table at 6.6% StdDev,
+which is what that drift looks like. It reads 44.32 GFLOP/s against the
+57.22 measured pinned on a P-core, so it understates the baseline by 29% and
+overstates every speedup by the same factor. Against the pinned figure the
+real peak speedup is 2.98x on 6 threads (50% per-thread efficiency), not the
+3.85x the in-run baseline suggests.
 
-Ruled out: memory bandwidth (packed-B re-streaming is ~3.8 GB/s at n=2048, DRAM
-under 1 GB/s) and fork/join overhead (136 `Parallel.For` cycles at a generous
-40 us each is 5.4 ms of 126 ms).
+This is the sharp edge of finding 6: you must not pin a scaling sweep, and
+the 1-thread row of an unpinned sweep is therefore worthless as a
+denominator. Take the baseline from a separate pinned run.
 
-**Conclusions: SMT is worthless here** (P-only 136.0 vs P+SMT 128.7 — FMA-bound
-siblings contend for the same units). E-cores add roughly 12%. Sweet spot is
-6-8 threads, flat beyond. ~150-175 GFLOP/s is this machine, not this code.
-A desktop part with real power headroom would tell a very different story.
+*The decline beyond the peak is NOT yet confirmed.* Thread count and
+execution order are the same variable in this sweep — higher thread counts
+run both later and hotter — which is exactly the confound of finding 7. A
+descending run is needed before the shape past the peak can be trusted. The
+peak location is safe (it reproduces across two campaigns); the tail is not.
 
 ## LU
 
@@ -277,23 +286,42 @@ A descending run (`TENSILE_BENCH_REVERSE=1`) would settle the small-n
 crossover. Until then the honest statement is: nb=64 above n=1024, and the
 optimum below that is unknown.
 
-**The "% of same-size GEMM" column is still missing, deliberately.** This LU
-is threaded; the only GEMM figures taken so far are pinned single-core.
-Dividing threaded LU by single-core GEMM gives 114% at n=2048, which measures
-the thread count and not the factorization — the very error this table was
-being re-taken to remove. It needs threaded GEMM at matching sizes from
-`ThreadScalingBenchmarks`.
+**Against threaded GEMM at the same thread count, LU is at 46%** — and the
+arithmetic explains the whole gap without implicating the factorization.
 
-What can be said without that column: threaded LU on 20 threads reaches
-65.5 GFLOP/s where one core's GEMM reaches 57.2. If threaded GEMM lands
-anywhere near the 150-175 the old threading table suggests, LU is at roughly
-40% of GEMM rather than LAPACK's 70-80%, which would make the serial panel
-and row interchanges the dominant cost and put real weight behind recursive
-panel factorization. Stated as a hypothesis, not a result.
+| n | LU (best nb) | threaded GEMM, 20 threads | ratio |
+| --- | --- | --- | --- |
+| 512 | 30.71 | 121.79 | 25% |
+| 2048 | 65.52 | 142.25 | **46%** |
+
+LAPACK's norm is 70-80%, so 46% looks alarming. It is not a defect, it is
+Amdahl, and the numbers close:
+
+- Threaded GEMM is 2.49x single-core GEMM (142.25 / 57.22).
+- Apply that to the GEMM share alone of the phase breakdown below — 65% GEMM,
+  35% panel + swaps + TRSM, all three of which are serial — and the
+  factorization should speed up by 100 / (65/2.49 + 35) = **1.64x**.
+- Working backwards from the observed 65.52 threaded, serial LU would be
+  **39.95 GFLOP/s, or 69.8% of serial GEMM** — squarely inside LAPACK's band.
+
+So the factorization itself is healthy at roughly 70% of GEMM, exactly as it
+should be, and the threaded ratio collapses only because barely two thirds of
+the work is threaded at all. **The bottleneck is the serial 35%, not the
+blocked algorithm.** That is a far sharper case for recursive (Toledo) panel
+factorization than "LU is at 65% of GEMM" ever was: shrinking the panel
+attacks the 14%, and threading the swaps and TRSM attacks the other 21%.
+
+Two caveats on that reconciliation. The phase breakdown it leans on was
+measured single-core on the old container, so the split on this machine may
+differ; and LU and the GEMM sweep are different benchmark classes, which have
+been seen to disagree by 8-18% in absolute terms within one sitting. The
+conclusion is robust to both — a 46% ratio would have to be wrong by a very
+large factor to reach 70% — but the second decimal place is not.
 
 Phase breakdown at n=2048, nb=64 — GEMM 65%, panel 14%, swaps 10%, TRSM 11% —
 is from the old single-core container run and has NOT been re-taken threaded.
-Expect the serial phases to dominate more once they are.
+Re-taking it is now the highest-value LU measurement, because it is the input
+to the Amdahl argument above.
 
 Residuals: `||PA-LU||_F / ||A||_F` worst 1.80e-15, `||Ax-b||_inf /
 (||A||_inf ||x||_inf)` worst 3.63e-16, across 11 shapes (square, tall, wide,
@@ -333,6 +361,16 @@ well- and ill-conditioned inputs.
 6. **`Environment.ProcessorCount` respects the affinity mask**, so
    `taskset -c 0` makes a thread-count sweep degenerate. Pin for single-thread
    comparisons; do not pin for scaling sweeps.
+
+   The corollary bites on a hybrid part: **the 1-thread row of an unpinned
+   sweep is worthless as a baseline.** A `Parallel.For` limited to one worker
+   still goes wherever the scheduler puts it, and on a 12700H that includes
+   the E-cores. Measured, the unpinned 1-thread row read 44.32 GFLOP/s against
+   57.22 pinned to a P-core — understating the baseline by 29% and inflating
+   every speedup in the table by the same factor (3.85x claimed against 2.98x
+   real). It also had the worst dispersion in the sweep, 6.6% StdDev, which is
+   the tell. Take the numerator from the unpinned sweep and the denominator
+   from a separate pinned run.
 
 7. **A one-directional sweep cannot tell a parameter from a cooler.** On a
    laptop part, later configurations run heat-soaked, so any sweep confounds
@@ -473,12 +511,16 @@ well- and ill-conditioned inputs.
   behind it, which the serial sweep taught us not to trust; a descending run
   would settle it. And the "% of same-size GEMM" column still needs threaded
   GEMM figures at matching sizes before it can be computed at all.
-- **Reverse-order thread sweep not done** (see finding 7). `ThreadScalingBenchmarks`
-  plus `TENSILE_BENCH_REVERSE=1` now makes it one command each way. Note the
-  reversal had to be a custom `IOrderer`: BenchmarkDotNet sorts cases by
-  parameter value before executing them, so reversing a `ParamsSource` list
-  changes nothing at all — verified by diffing the `// Benchmark:` lines of two
-  runs. *Not yet run on the 12700H.*
+- **The thread sweep's tail needs a descending run.** The ascending sweep is
+  taken (see "Threading" above) and its peak is trustworthy — 6-8 threads,
+  150-175 GFLOP/s, replicated across two campaigns. The 17-19% decline past
+  the peak is not: thread count and execution order are the same variable, so
+  higher counts run both later and hotter. `TENSILE_BENCH_REVERSE=1` settles
+  it in one command.
+- **The LU phase breakdown is single-core and from the old container.** It is
+  now load-bearing — the Amdahl argument that explains LU's 46% of threaded
+  GEMM rests on the 65/14/10/11 split — so re-taking it threaded on this
+  machine is the highest-value LU measurement outstanding.
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
   LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
   which is strong evidence but not the same thing.

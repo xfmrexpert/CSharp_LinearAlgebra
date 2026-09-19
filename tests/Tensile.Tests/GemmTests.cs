@@ -172,6 +172,97 @@ public abstract unsafe class GemmContract<TCase> where TCase : struct, IKernelCa
         Kernel.Multiply(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
         Kernel.MultiplySerial(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride, 1.0, c.Data, c.Stride);
     }
+    // ---- the knobs the benchmarks turn -------------------------------------
+
+    /// <summary>
+    /// Cache-blocking parameters change how the work is cut up and nothing
+    /// else, so every combination must agree with the reference. This matters
+    /// more than it looks: BlockSizeBenchmarks sweeps these, and a block size
+    /// that produced a wrong answer quickly would read as a win.
+    ///
+    /// The awkward values are the point. MC and NC are rounded up to the
+    /// kernel's MR and NR, KC is not, and a block smaller than one micro-panel
+    /// or larger than the whole problem are both legal and both edge cases.
+    /// </summary>
+    [Theory]
+    [InlineData(144, 256, 4096)]      // the threaded path's cache-derived values
+    [InlineData(288, 384, 4096)]      // the serial path's placeholders
+    [InlineData(144, 384, 4096)]      // cross terms
+    [InlineData(288, 256, 4096)]
+    [InlineData(1, 1, 1)]             // smaller than any micro-panel
+    [InlineData(7, 3, 5)]             // prime, rounds up to MR/NR
+    [InlineData(4096, 4096, 4096)]    // larger than the problem
+    public void BlockSizesDoNotChangeTheAnswer(int mc, int kc, int nc)
+    {
+        const int m = 67, n = 53, k = 41;
+
+        using var a = TestMatrix.Random(m, k, seed: 31);
+        using var b = TestMatrix.Random(k, n, seed: 32);
+        using var c = TestMatrix.Random(m, n, seed: 33);
+        using var expected = c.Clone();
+
+        Reference.Multiply(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+            0.5, expected.Data, expected.Stride);
+
+        using GemmScratch scratch = Kernel.Scratch(mc, kc, nc);
+        Kernel.Gemm(scratch, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+            0.5, c.Data, c.Stride);
+
+        double residual = Reference.RelativeResidual(
+            m, n, c.Data, c.Stride, expected.Data, expected.Stride);
+
+        Assert.True(residual < Tolerance, $"MC={mc} KC={kc} NC={nc}: residual {residual:E3}");
+    }
+
+    [Theory]
+    [InlineData(0, 256, 4096)]
+    [InlineData(144, 0, 4096)]
+    [InlineData(144, 256, 0)]
+    [InlineData(-1, 256, 4096)]
+    [InlineData(144, int.MinValue, 4096)]
+    public void ScratchRejectsNonPositiveBlockSizes(int mc, int kc, int nc) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => Kernel.Scratch(mc, kc, nc));
+
+    /// <summary>
+    /// The dispatch threshold picks a path; it must never pick an answer. Both
+    /// extremes are exercised on one problem, so whichever path the default
+    /// would have taken, the other one is covered too.
+    ///
+    /// ParallelCrossoverBenchmarks exists to measure where this threshold
+    /// belongs, which is only worth doing if moving it is safe.
+    /// </summary>
+    [Fact]
+    public void ParallelThresholdChangesThePathAndNotTheAnswer()
+    {
+        const int m = 96, n = 72, k = 64;
+
+        using var a = TestMatrix.Random(m, k, seed: 41);
+        using var b = TestMatrix.Random(k, n, seed: 42);
+        using var expected = new TestMatrix(m, n);
+
+        Reference.Multiply(m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+            0.0, expected.Data, expected.Stride);
+
+        using var gemm = Kernel.Multithreaded();
+
+        Assert.Equal(GemmDispatch.DefaultParallelThreshold, gemm.ParallelThreshold);
+
+        // 0 forces the threaded path for any size; long.MaxValue forces serial.
+        foreach (long threshold in new[] { 0L, long.MaxValue })
+        {
+            gemm.ParallelThreshold = threshold;
+            Assert.Equal(threshold, gemm.ParallelThreshold);
+
+            using var c = new TestMatrix(m, n);
+            Kernel.Multiply(gemm, m, n, k, 1.0, a.Data, a.Stride, b.Data, b.Stride,
+                0.0, c.Data, c.Stride);
+
+            double residual = Reference.RelativeResidual(
+                m, n, c.Data, c.Stride, expected.Data, expected.Stride);
+
+            Assert.True(residual < Tolerance, $"threshold {threshold}: residual {residual:E3}");
+        }
+    }
 
     private enum Path { Serial, Parallel }
 

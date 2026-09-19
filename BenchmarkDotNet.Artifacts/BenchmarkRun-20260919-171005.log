@@ -1,0 +1,1164 @@
+// Validating benchmarks:
+// ***** BenchmarkRunner: Start   *****
+// ***** Found 24 benchmark(s) in total *****
+// ***** Building 1 exe(s) in Parallel: Start   *****
+// start dotnet  restore --nodeReuse:false /p:UseSharedCompilation=false /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/" /p:OutDir="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0/" /p:OutputPath="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0/" /p:PublishDir="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/publish/" in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1
+// command took 2.67 sec and exited with 0
+// start dotnet  build -c Release --no-restore --nodeReuse:false /p:UseSharedCompilation=false /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/" /p:OutDir="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0/" /p:OutputPath="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0/" /p:PublishDir="/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/publish/" --output "/home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0/" in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1
+// command took 21 sec and exited with 0
+// ***** Done, took 00:00:23 (23.74 sec)   *****
+// Found 12 benchmarks:
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=32]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=64]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=128]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=32]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=64]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=128]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=32]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=64]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=128]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=32]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=64]
+//   LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=128]
+
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=32]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 256, BlockSize: 32)" --job Dry --benchmarkId 0 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 17250412.00 ns, 17.2504 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 17250412.00 ns, 17.2504 ms/op
+// GC:  0 0 0 1144 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 1169 has exited with code 0.
+
+Mean = 17.250 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 17.250 ms, Q1 = 17.250 ms, Median = 17.250 ms, Q3 = 17.250 ms, Max = 17.250 ms
+IQR = 0.000 ms, LowerFence = 17.250 ms, UpperFence = 17.250 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 23 (95.8 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=64]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 256, BlockSize: 64)" --job Dry --benchmarkId 1 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 17571930.00 ns, 17.5719 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 17571930.00 ns, 17.5719 ms/op
+// GC:  0 0 0 1144 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 1183 has exited with code 0.
+
+Mean = 17.572 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 17.572 ms, Q1 = 17.572 ms, Median = 17.572 ms, Q3 = 17.572 ms, Max = 17.572 ms
+IQR = 0.000 ms, LowerFence = 17.572 ms, UpperFence = 17.572 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 22 (91.7 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 256, BlockSize: 128)" --job Dry --benchmarkId 2 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 20033844.00 ns, 20.0338 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 20033844.00 ns, 20.0338 ms/op
+// GC:  0 0 0 1144 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 1196 has exited with code 0.
+
+Mean = 20.034 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 20.034 ms, Q1 = 20.034 ms, Median = 20.034 ms, Q3 = 20.034 ms, Max = 20.034 ms
+IQR = 0.000 ms, LowerFence = 20.034 ms, UpperFence = 20.034 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 21 (87.5 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=32]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 512, BlockSize: 32)" --job Dry --benchmarkId 3 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 34181440.00 ns, 34.1814 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 34181440.00 ns, 34.1814 ms/op
+// GC:  0 0 0 35864 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 1209 has exited with code 0.
+
+Mean = 34.181 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 34.181 ms, Q1 = 34.181 ms, Median = 34.181 ms, Q3 = 34.181 ms, Max = 34.181 ms
+IQR = 0.000 ms, LowerFence = 34.181 ms, UpperFence = 34.181 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 20 (83.3 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=64]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 512, BlockSize: 64)" --job Dry --benchmarkId 4 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 37848944.00 ns, 37.8489 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 37848944.00 ns, 37.8489 ms/op
+// GC:  0 0 0 32856 1
+// Threading:  0 0 1
+
+// AfterAll
+// Benchmark Process 1222 has exited with code 0.
+
+Mean = 37.849 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 37.849 ms, Q1 = 37.849 ms, Median = 37.849 ms, Q3 = 37.849 ms, Max = 37.849 ms
+IQR = 0.000 ms, LowerFence = 37.849 ms, UpperFence = 37.849 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 19 (79.2 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 512, BlockSize: 128)" --job Dry --benchmarkId 5 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 39228704.00 ns, 39.2287 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 39228704.00 ns, 39.2287 ms/op
+// GC:  0 0 0 17128 1
+// Threading:  5 0 1
+
+// AfterAll
+// Benchmark Process 1235 has exited with code 0.
+
+Mean = 39.229 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 39.229 ms, Q1 = 39.229 ms, Median = 39.229 ms, Q3 = 39.229 ms, Max = 39.229 ms
+IQR = 0.000 ms, LowerFence = 39.229 ms, UpperFence = 39.229 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 18 (75.0 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=32]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 1024, BlockSize: 32)" --job Dry --benchmarkId 6 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 71234783.00 ns, 71.2348 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 71234783.00 ns, 71.2348 ms/op
+// GC:  0 0 0 246448 1
+// Threading:  112 0 1
+
+// AfterAll
+// Benchmark Process 1252 has exited with code 0.
+
+Mean = 71.235 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 71.235 ms, Q1 = 71.235 ms, Median = 71.235 ms, Q3 = 71.235 ms, Max = 71.235 ms
+IQR = 0.000 ms, LowerFence = 71.235 ms, UpperFence = 71.235 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 17 (70.8 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=64]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 1024, BlockSize: 64)" --job Dry --benchmarkId 7 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 69417493.00 ns, 69.4175 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 69417493.00 ns, 69.4175 ms/op
+// GC:  0 0 0 154736 1
+// Threading:  134 0 1
+
+// AfterAll
+// Benchmark Process 1271 has exited with code 0.
+
+Mean = 69.417 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 69.417 ms, Q1 = 69.417 ms, Median = 69.417 ms, Q3 = 69.417 ms, Max = 69.417 ms
+IQR = 0.000 ms, LowerFence = 69.417 ms, UpperFence = 69.417 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 16 (66.7 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 1024, BlockSize: 128)" --job Dry --benchmarkId 8 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 68824720.00 ns, 68.8247 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 68824720.00 ns, 68.8247 ms/op
+// GC:  0 0 0 82152 1
+// Threading:  89 0 1
+
+// AfterAll
+// Benchmark Process 1290 has exited with code 0.
+
+Mean = 68.825 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 68.825 ms, Q1 = 68.825 ms, Median = 68.825 ms, Q3 = 68.825 ms, Max = 68.825 ms
+IQR = 0.000 ms, LowerFence = 68.825 ms, UpperFence = 68.825 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 15 (62.5 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=32]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 2048, BlockSize: 32)" --job Dry --benchmarkId 9 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 195804347.00 ns, 195.8043 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 195804347.00 ns, 195.8043 ms/op
+// GC:  0 0 0 1126560 1
+// Threading:  1317 1 1
+
+// AfterAll
+// Benchmark Process 1309 has exited with code 0.
+
+Mean = 195.804 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 195.804 ms, Q1 = 195.804 ms, Median = 195.804 ms, Q3 = 195.804 ms, Max = 195.804 ms
+IQR = 0.000 ms, LowerFence = 195.804 ms, UpperFence = 195.804 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 14 (58.3 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=64]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 2048, BlockSize: 64)" --job Dry --benchmarkId 10 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 180320931.00 ns, 180.3209 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 180320931.00 ns, 180.3209 ms/op
+// GC:  0 0 0 592808 1
+// Threading:  728 0 1
+
+// AfterAll
+// Benchmark Process 1329 has exited with code 0.
+
+Mean = 180.321 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 180.321 ms, Q1 = 180.321 ms, Median = 180.321 ms, Q3 = 180.321 ms, Max = 180.321 ms
+IQR = 0.000 ms, LowerFence = 180.321 ms, UpperFence = 180.321 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 13 (54.2 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 118 119 --benchmarkName "Tensile.Benchmarks.LuBenchmarks.Factor(N: 2048, BlockSize: 128)" --job Dry --benchmarkId 11 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 202313466.00 ns, 202.3135 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 202313466.00 ns, 202.3135 ms/op
+// GC:  0 0 0 297432 1
+// Threading:  360 0 1
+
+// AfterAll
+// Benchmark Process 1349 has exited with code 0.
+
+Mean = 202.313 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 202.313 ms, Q1 = 202.313 ms, Median = 202.313 ms, Q3 = 202.313 ms, Max = 202.313 ms
+IQR = 0.000 ms, LowerFence = 202.313 ms, UpperFence = 202.313 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 12 (50.0 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.LuBenchmarks-report.csv
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.LuBenchmarks-report-github.md
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.LuBenchmarks-report.html
+
+// * Detailed results *
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=32]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 17.250 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 17.250 ms, Q1 = 17.250 ms, Median = 17.250 ms, Q3 = 17.250 ms, Max = 17.250 ms
+IQR = 0.000 ms, LowerFence = 17.250 ms, UpperFence = 17.250 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[17.250 ms ; 17.250 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=64]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 17.572 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 17.572 ms, Q1 = 17.572 ms, Median = 17.572 ms, Q3 = 17.572 ms, Max = 17.572 ms
+IQR = 0.000 ms, LowerFence = 17.572 ms, UpperFence = 17.572 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[17.572 ms ; 17.572 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=256, BlockSize=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 20.034 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 20.034 ms, Q1 = 20.034 ms, Median = 20.034 ms, Q3 = 20.034 ms, Max = 20.034 ms
+IQR = 0.000 ms, LowerFence = 20.034 ms, UpperFence = 20.034 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[20.034 ms ; 20.034 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=32]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 34.181 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 34.181 ms, Q1 = 34.181 ms, Median = 34.181 ms, Q3 = 34.181 ms, Max = 34.181 ms
+IQR = 0.000 ms, LowerFence = 34.181 ms, UpperFence = 34.181 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[34.181 ms ; 34.181 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=64]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 37.849 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 37.849 ms, Q1 = 37.849 ms, Median = 37.849 ms, Q3 = 37.849 ms, Max = 37.849 ms
+IQR = 0.000 ms, LowerFence = 37.849 ms, UpperFence = 37.849 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[37.849 ms ; 37.849 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=512, BlockSize=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 39.229 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 39.229 ms, Q1 = 39.229 ms, Median = 39.229 ms, Q3 = 39.229 ms, Max = 39.229 ms
+IQR = 0.000 ms, LowerFence = 39.229 ms, UpperFence = 39.229 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[39.229 ms ; 39.229 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=32]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 71.235 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 71.235 ms, Q1 = 71.235 ms, Median = 71.235 ms, Q3 = 71.235 ms, Max = 71.235 ms
+IQR = 0.000 ms, LowerFence = 71.235 ms, UpperFence = 71.235 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[71.235 ms ; 71.235 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=64]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 69.417 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 69.417 ms, Q1 = 69.417 ms, Median = 69.417 ms, Q3 = 69.417 ms, Max = 69.417 ms
+IQR = 0.000 ms, LowerFence = 69.417 ms, UpperFence = 69.417 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[69.417 ms ; 69.417 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=1024, BlockSize=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 68.825 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 68.825 ms, Q1 = 68.825 ms, Median = 68.825 ms, Q3 = 68.825 ms, Max = 68.825 ms
+IQR = 0.000 ms, LowerFence = 68.825 ms, UpperFence = 68.825 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[68.825 ms ; 68.825 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=32]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 195.804 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 195.804 ms, Q1 = 195.804 ms, Median = 195.804 ms, Q3 = 195.804 ms, Max = 195.804 ms
+IQR = 0.000 ms, LowerFence = 195.804 ms, UpperFence = 195.804 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[195.804 ms ; 195.804 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=64]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 180.321 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 180.321 ms, Q1 = 180.321 ms, Median = 180.321 ms, Q3 = 180.321 ms, Max = 180.321 ms
+IQR = 0.000 ms, LowerFence = 180.321 ms, UpperFence = 180.321 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[180.321 ms ; 180.321 ms) | @
+---------------------------------------------------
+
+LuBenchmarks.Factor: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [N=2048, BlockSize=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 202.313 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 202.313 ms, Q1 = 202.313 ms, Median = 202.313 ms, Q3 = 202.313 ms, Max = 202.313 ms
+IQR = 0.000 ms, LowerFence = 202.313 ms, UpperFence = 202.313 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[202.313 ms ; 202.313 ms) | @
+---------------------------------------------------
+
+// * Summary *
+
+BenchmarkDotNet v0.15.8, Linux Ubuntu 24.04.4 LTS (Noble Numbat)
+Intel Xeon Processor 2.80GHz, 1 CPU, 4 logical and 4 physical cores
+.NET SDK 10.0.112
+  [Host] : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Dry    : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+
+Job=Dry  IterationCount=1  LaunchCount=1  
+RunStrategy=ColdStart  UnrollFactor=1  WarmupCount=1  
+
+| Method | N    | BlockSize | Mean      | Error | Allocated  |
+|------- |----- |---------- |----------:|------:|-----------:|
+| Factor | 256  | 32        |  17.25 ms |    NA |    1.12 KB |
+| Factor | 256  | 64        |  17.57 ms |    NA |    1.12 KB |
+| Factor | 256  | 128       |  20.03 ms |    NA |    1.12 KB |
+| Factor | 512  | 32        |  34.18 ms |    NA |   35.02 KB |
+| Factor | 512  | 64        |  37.85 ms |    NA |   32.09 KB |
+| Factor | 512  | 128       |  39.23 ms |    NA |   16.73 KB |
+| Factor | 1024 | 32        |  71.23 ms |    NA |  240.67 KB |
+| Factor | 1024 | 64        |  69.42 ms |    NA |  151.11 KB |
+| Factor | 1024 | 128       |  68.82 ms |    NA |   80.23 KB |
+| Factor | 2048 | 32        | 195.80 ms |    NA | 1100.16 KB |
+| Factor | 2048 | 64        | 180.32 ms |    NA |  578.91 KB |
+| Factor | 2048 | 128       | 202.31 ms |    NA |  290.46 KB |
+
+// * Warnings *
+MinIterationTime
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 17.25ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 17.572ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 20.034ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 34.181ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 37.849ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 39.229ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 71.235ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 69.417ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  LuBenchmarks.Factor: Dry -> The minimum observed iteration time is 68.825ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+
+// * Legends *
+  N         : Value of the 'N' parameter
+  BlockSize : Value of the 'BlockSize' parameter
+  Mean      : Arithmetic mean of all measurements
+  Error     : Half of 99.9% confidence interval
+  Allocated : Allocated memory per single operation (managed only, inclusive, 1KB = 1024B)
+  1 ms      : 1 Millisecond (0.001 sec)
+
+// * Diagnostic Output - MemoryDiagnoser *
+
+
+// ***** BenchmarkRunner: End *****
+Run time: 00:00:03 (3.98 sec), executed benchmarks: 12
+
+// Found 12 benchmarks:
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=128]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=512]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=2048]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=128]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=512]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=2048]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=128]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=512]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=2048]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=128]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=512]
+//   BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=2048]
+
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 256, N: 128)" --job Dry --benchmarkId 12 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 5595907.00 ns, 5.5959 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 5595907.00 ns, 5.5959 ms/op
+
+// AfterAll
+// Benchmark Process 1371 has exited with code 0.
+
+Mean = 5.596 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.596 ms, Q1 = 5.596 ms, Median = 5.596 ms, Q3 = 5.596 ms, Max = 5.596 ms
+IQR = 0.000 ms, LowerFence = 5.596 ms, UpperFence = 5.596 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 11 (45.8 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=512]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 256, N: 512)" --job Dry --benchmarkId 13 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 12955792.00 ns, 12.9558 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 12955792.00 ns, 12.9558 ms/op
+
+// AfterAll
+// Benchmark Process 1384 has exited with code 0.
+
+Mean = 12.956 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 12.956 ms, Q1 = 12.956 ms, Median = 12.956 ms, Q3 = 12.956 ms, Max = 12.956 ms
+IQR = 0.000 ms, LowerFence = 12.956 ms, UpperFence = 12.956 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 10 (41.7 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=2048]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 256, N: 2048)" --job Dry --benchmarkId 14 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 356093582.00 ns, 356.0936 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 356093582.00 ns, 356.0936 ms/op
+
+// AfterAll
+// Benchmark Process 1397 has exited with code 0.
+
+Mean = 356.094 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 356.094 ms, Q1 = 356.094 ms, Median = 356.094 ms, Q3 = 356.094 ms, Max = 356.094 ms
+IQR = 0.000 ms, LowerFence = 356.094 ms, UpperFence = 356.094 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 9 (37.5 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 384, N: 128)" --job Dry --benchmarkId 15 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 5637849.00 ns, 5.6378 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 5637849.00 ns, 5.6378 ms/op
+
+// AfterAll
+// Benchmark Process 1410 has exited with code 0.
+
+Mean = 5.638 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.638 ms, Q1 = 5.638 ms, Median = 5.638 ms, Q3 = 5.638 ms, Max = 5.638 ms
+IQR = 0.000 ms, LowerFence = 5.638 ms, UpperFence = 5.638 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 8 (33.3 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=512]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 384, N: 512)" --job Dry --benchmarkId 16 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 13988692.00 ns, 13.9887 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 13988692.00 ns, 13.9887 ms/op
+
+// AfterAll
+// Benchmark Process 1423 has exited with code 0.
+
+Mean = 13.989 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 13.989 ms, Q1 = 13.989 ms, Median = 13.989 ms, Q3 = 13.989 ms, Max = 13.989 ms
+IQR = 0.000 ms, LowerFence = 13.989 ms, UpperFence = 13.989 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 7 (29.2 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=2048]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 124 125 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 144, Kc: 384, N: 2048)" --job Dry --benchmarkId 17 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 419814324.00 ns, 419.8143 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 419814324.00 ns, 419.8143 ms/op
+
+// AfterAll
+// Benchmark Process 1436 has exited with code 0.
+
+Mean = 419.814 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 419.814 ms, Q1 = 419.814 ms, Median = 419.814 ms, Q3 = 419.814 ms, Max = 419.814 ms
+IQR = 0.000 ms, LowerFence = 419.814 ms, UpperFence = 419.814 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 6 (25.0 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 256, N: 128)" --job Dry --benchmarkId 18 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 5662287.00 ns, 5.6623 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 5662287.00 ns, 5.6623 ms/op
+
+// AfterAll
+// Benchmark Process 1449 has exited with code 0.
+
+Mean = 5.662 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.662 ms, Q1 = 5.662 ms, Median = 5.662 ms, Q3 = 5.662 ms, Max = 5.662 ms
+IQR = 0.000 ms, LowerFence = 5.662 ms, UpperFence = 5.662 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 5 (20.8 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=512]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 256, N: 512)" --job Dry --benchmarkId 19 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 12344464.00 ns, 12.3445 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 12344464.00 ns, 12.3445 ms/op
+
+// AfterAll
+// Benchmark Process 1462 has exited with code 0.
+
+Mean = 12.344 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 12.344 ms, Q1 = 12.344 ms, Median = 12.344 ms, Q3 = 12.344 ms, Max = 12.344 ms
+IQR = 0.000 ms, LowerFence = 12.344 ms, UpperFence = 12.344 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 4 (16.7 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=2048]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 256, N: 2048)" --job Dry --benchmarkId 20 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 342950641.00 ns, 342.9506 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 342950641.00 ns, 342.9506 ms/op
+
+// AfterAll
+// Benchmark Process 1475 has exited with code 0.
+
+Mean = 342.951 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 342.951 ms, Q1 = 342.951 ms, Median = 342.951 ms, Q3 = 342.951 ms, Max = 342.951 ms
+IQR = 0.000 ms, LowerFence = 342.951 ms, UpperFence = 342.951 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 3 (12.5 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=128]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 384, N: 128)" --job Dry --benchmarkId 21 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 5650330.00 ns, 5.6503 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 5650330.00 ns, 5.6503 ms/op
+
+// AfterAll
+// Benchmark Process 1488 has exited with code 0.
+
+Mean = 5.650 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.650 ms, Q1 = 5.650 ms, Median = 5.650 ms, Q3 = 5.650 ms, Max = 5.650 ms
+IQR = 0.000 ms, LowerFence = 5.650 ms, UpperFence = 5.650 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 2 (8.3 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=512]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 384, N: 512)" --job Dry --benchmarkId 22 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 13363992.00 ns, 13.3640 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 13363992.00 ns, 13.3640 ms/op
+
+// AfterAll
+// Benchmark Process 1501 has exited with code 0.
+
+Mean = 13.364 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 13.364 ms, Q1 = 13.364 ms, Median = 13.364 ms, Q3 = 13.364 ms, Max = 13.364 ms
+IQR = 0.000 ms, LowerFence = 13.364 ms, UpperFence = 13.364 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 1 (4.2 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// **************************
+// Benchmark: BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=2048]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet Tensile.Benchmarks-Dry-1.dll --anonymousPipes 122 123 --benchmarkName "Tensile.Benchmarks.BlockSizeBenchmarks.Serial(Mc: 288, Kc: 384, N: 2048)" --job Dry --benchmarkId 23 in /home/user/CSharp_LinearAlgebra/bench/Tensile.Benchmarks/bin/Release/net10.0/Tensile.Benchmarks-Dry-1/bin/Release/net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.8
+// Runtime=.NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+// GC=Concurrent Server
+// HardwareIntrinsics=AVX512 F+BW+CD+DQ+VL,AVX2+BMI1+BMI2+F16C+FMA+LZCNT+MOVBE,AVX,SSE3+SSSE3+SSE4.1+SSE4.2+POPCNT,X86Base+SSE+SSE2,AES+PCLMUL VectorSize=256
+// Job: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1)
+
+// BeforeActualRun
+WorkloadActual   1: 1 op, 414076631.00 ns, 414.0766 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 1 op, 414076631.00 ns, 414.0766 ms/op
+
+// AfterAll
+// Benchmark Process 1514 has exited with code 0.
+
+Mean = 414.077 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 414.077 ms, Q1 = 414.077 ms, Median = 414.077 ms, Q3 = 414.077 ms, Max = 414.077 ms
+IQR = 0.000 ms, LowerFence = 414.077 ms, UpperFence = 414.077 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+
+// ** Remained 0 (0.0 %) benchmark(s) to run. Estimated finish 2026-09-19 17:10 (0h 0m from now) **
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.BlockSizeBenchmarks-report.csv
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.BlockSizeBenchmarks-report-github.md
+  BenchmarkDotNet.Artifacts/results/Tensile.Benchmarks.BlockSizeBenchmarks-report.html
+
+// * Detailed results *
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 5.596 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.596 ms, Q1 = 5.596 ms, Median = 5.596 ms, Q3 = 5.596 ms, Max = 5.596 ms
+IQR = 0.000 ms, LowerFence = 5.596 ms, UpperFence = 5.596 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[5.596 ms ; 5.596 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=512]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 12.956 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 12.956 ms, Q1 = 12.956 ms, Median = 12.956 ms, Q3 = 12.956 ms, Max = 12.956 ms
+IQR = 0.000 ms, LowerFence = 12.956 ms, UpperFence = 12.956 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[12.956 ms ; 12.956 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=256, N=2048]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 356.094 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 356.094 ms, Q1 = 356.094 ms, Median = 356.094 ms, Q3 = 356.094 ms, Max = 356.094 ms
+IQR = 0.000 ms, LowerFence = 356.094 ms, UpperFence = 356.094 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[356.094 ms ; 356.094 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 5.638 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.638 ms, Q1 = 5.638 ms, Median = 5.638 ms, Q3 = 5.638 ms, Max = 5.638 ms
+IQR = 0.000 ms, LowerFence = 5.638 ms, UpperFence = 5.638 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[5.638 ms ; 5.638 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=512]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 13.989 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 13.989 ms, Q1 = 13.989 ms, Median = 13.989 ms, Q3 = 13.989 ms, Max = 13.989 ms
+IQR = 0.000 ms, LowerFence = 13.989 ms, UpperFence = 13.989 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[13.989 ms ; 13.989 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=144, Kc=384, N=2048]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 419.814 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 419.814 ms, Q1 = 419.814 ms, Median = 419.814 ms, Q3 = 419.814 ms, Max = 419.814 ms
+IQR = 0.000 ms, LowerFence = 419.814 ms, UpperFence = 419.814 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[419.814 ms ; 419.814 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 5.662 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.662 ms, Q1 = 5.662 ms, Median = 5.662 ms, Q3 = 5.662 ms, Max = 5.662 ms
+IQR = 0.000 ms, LowerFence = 5.662 ms, UpperFence = 5.662 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[5.662 ms ; 5.662 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=512]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 12.344 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 12.344 ms, Q1 = 12.344 ms, Median = 12.344 ms, Q3 = 12.344 ms, Max = 12.344 ms
+IQR = 0.000 ms, LowerFence = 12.344 ms, UpperFence = 12.344 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[12.344 ms ; 12.344 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=256, N=2048]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 342.951 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 342.951 ms, Q1 = 342.951 ms, Median = 342.951 ms, Q3 = 342.951 ms, Max = 342.951 ms
+IQR = 0.000 ms, LowerFence = 342.951 ms, UpperFence = 342.951 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[342.951 ms ; 342.951 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=128]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 5.650 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 5.650 ms, Q1 = 5.650 ms, Median = 5.650 ms, Q3 = 5.650 ms, Max = 5.650 ms
+IQR = 0.000 ms, LowerFence = 5.650 ms, UpperFence = 5.650 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[5.650 ms ; 5.650 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=512]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 13.364 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 13.364 ms, Q1 = 13.364 ms, Median = 13.364 ms, Q3 = 13.364 ms, Max = 13.364 ms
+IQR = 0.000 ms, LowerFence = 13.364 ms, UpperFence = 13.364 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[13.364 ms ; 13.364 ms) | @
+---------------------------------------------------
+
+BlockSizeBenchmarks.Serial: Dry(IterationCount=1, LaunchCount=1, RunStrategy=ColdStart, UnrollFactor=1, WarmupCount=1) [Mc=288, Kc=384, N=2048]
+Runtime = .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4; GC = Concurrent Server
+Mean = 414.077 ms, StdErr = 0.000 ms (0.00%), N = 1, StdDev = 0.000 ms
+Min = 414.077 ms, Q1 = 414.077 ms, Median = 414.077 ms, Q3 = 414.077 ms, Max = 414.077 ms
+IQR = 0.000 ms, LowerFence = 414.077 ms, UpperFence = 414.077 ms
+ConfidenceInterval = [NaN ms; NaN ms] (CI 99.9%), Margin = NaN ms (NaN% of Mean)
+Skewness = NaN, Kurtosis = NaN, MValue = 2
+-------------------- Histogram --------------------
+[414.077 ms ; 414.077 ms) | @
+---------------------------------------------------
+
+// * Summary *
+
+BenchmarkDotNet v0.15.8, Linux Ubuntu 24.04.4 LTS (Noble Numbat)
+Intel Xeon Processor 2.80GHz, 1 CPU, 4 logical and 4 physical cores
+.NET SDK 10.0.112
+  [Host] : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Dry    : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+
+Job=Dry  IterationCount=1  LaunchCount=1  
+RunStrategy=ColdStart  UnrollFactor=1  WarmupCount=1  
+
+| Method | Mc  | Kc  | N    | Mean       | Error |
+|------- |---- |---- |----- |-----------:|------:|
+| Serial | 144 | 256 | 128  |   5.596 ms |    NA |
+| Serial | 144 | 256 | 512  |  12.956 ms |    NA |
+| Serial | 144 | 256 | 2048 | 356.094 ms |    NA |
+| Serial | 144 | 384 | 128  |   5.638 ms |    NA |
+| Serial | 144 | 384 | 512  |  13.989 ms |    NA |
+| Serial | 144 | 384 | 2048 | 419.814 ms |    NA |
+| Serial | 288 | 256 | 128  |   5.662 ms |    NA |
+| Serial | 288 | 256 | 512  |  12.344 ms |    NA |
+| Serial | 288 | 256 | 2048 | 342.951 ms |    NA |
+| Serial | 288 | 384 | 128  |   5.650 ms |    NA |
+| Serial | 288 | 384 | 512  |  13.364 ms |    NA |
+| Serial | 288 | 384 | 2048 | 414.077 ms |    NA |
+
+// * Warnings *
+MinIterationTime
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 5.596ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 12.956ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 5.638ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 13.989ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 5.662ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 12.344ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 5.65ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+  BlockSizeBenchmarks.Serial: Dry -> The minimum observed iteration time is 13.364ms which is very small. It's recommended to increase it to at least 100ms using more operations.
+
+// * Legends *
+  Mc    : Value of the 'Mc' parameter
+  Kc    : Value of the 'Kc' parameter
+  N     : Value of the 'N' parameter
+  Mean  : Arithmetic mean of all measurements
+  Error : Half of 99.9% confidence interval
+  1 ms  : 1 Millisecond (0.001 sec)
+
+// ***** BenchmarkRunner: End *****
+Run time: 00:00:03 (3.97 sec), executed benchmarks: 12
+
+Global total time: 00:00:32 (32.03 sec), executed benchmarks: 24
+// * Artifacts cleanup *
+Artifacts cleanup is finished

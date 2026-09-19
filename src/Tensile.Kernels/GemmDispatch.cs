@@ -20,16 +20,25 @@ namespace Tensile.Kernels;
 internal sealed unsafe class GemmDispatch : IDisposable
 {
     /// <summary>
-    /// Work (2*m*n*k flops) below which the serial path wins.
+    /// Default work (m*n*k multiply-adds) below which the serial path wins.
     ///
     /// A Parallel.For fork/join costs on the order of tens of microseconds, and
     /// ParallelGemm issues 2 + ceil(m/MC) of them per k-slab. At roughly
     /// 50 GFLOP/s single-core, 4e6 multiply-adds is about 160 us of work, which
     /// covers several such barriers.
     ///
-    /// Derived from that argument, not measured. Sweep it.
+    /// Derived from that argument, not measured. The crossover it approximates
+    /// is what <c>ParallelCrossoverBenchmarks</c> measures directly, on square
+    /// operands and on the panel shapes LU's trailing update actually produces.
     /// </summary>
-    public const long ParallelThreshold = 4_000_000;
+    public const long DefaultParallelThreshold = 4_000_000;
+
+    /// <summary>
+    /// Work below which <see cref="Multiply{TKernel}"/> takes the serial path,
+    /// per dispatch rather than per process so a measurement can vary it
+    /// without a rebuild and without disturbing anything else running.
+    /// </summary>
+    public long ParallelThreshold { get; set; } = DefaultParallelThreshold;
 
     private GemmScratch? _serial;
     private ParallelGemmScratch? _parallel;

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>Tensile.Benchmarks.ApiOverheadBenchmarks-20260919-171109</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Linux Ubuntu 24.04.4 LTS (Noble Numbat)
+Intel Xeon Processor 2.80GHz, 1 CPU, 4 logical and 4 physical cores
+.NET SDK 10.0.112
+  [Host] : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Dry    : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+</code></pre>
+<pre><code>Job=Dry  IterationCount=1  LaunchCount=1  
+RunStrategy=ColdStart  UnrollFactor=1  WarmupCount=1  
+</code></pre>
+
+<table>
+<thead><tr><th>Method         </th><th>N</th><th>Mean</th><th>Error</th><th>Ratio</th><th>Allocated</th><th>Alloc Ratio</th>
+</tr>
+</thead><tbody><tr><td>&#39;native pointers&#39;</td><td>128</td><td>5.767 ms</td><td>NA</td><td>1.00</td><td>-</td><td>NA</td>
+</tr><tr><td>&#39;POH storage, direct&#39;</td><td>128</td><td>6.162 ms</td><td>NA</td><td>1.07</td><td>-</td><td>NA</td>
+</tr><tr><td>&#39;public API&#39;</td><td>128</td><td>7.874 ms</td><td>NA</td><td>1.37</td><td>-</td><td>NA</td>
+</tr><tr><td>&#39;native pointers&#39;</td><td>512</td><td>23.520 ms</td><td>NA</td><td>1.00</td><td>28768 B</td><td>1.00</td>
+</tr><tr><td>&#39;POH storage, direct&#39;</td><td>512</td><td>22.710 ms</td><td>NA</td><td>0.97</td><td>26800 B</td><td>0.93</td>
+</tr><tr><td>&#39;public API&#39;</td><td>512</td><td>25.231 ms</td><td>NA</td><td>1.07</td><td>26424 B</td><td>0.92</td>
+</tr><tr><td>&#39;native pointers&#39;</td><td>2048</td><td>210.520 ms</td><td>NA</td><td>1.00</td><td>286968 B</td><td>1.00</td>
+</tr><tr><td>&#39;POH storage, direct&#39;</td><td>2048</td><td>200.392 ms</td><td>NA</td><td>0.95</td><td>283984 B</td><td>0.99</td>
+</tr><tr><td>&#39;public API&#39;</td><td>2048</td><td>176.802 ms</td><td>NA</td><td>0.84</td><td>285312 B</td><td>0.99</td>
+</tr></tbody></table>
+</body>
+</html>

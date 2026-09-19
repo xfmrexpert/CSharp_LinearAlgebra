@@ -78,6 +78,14 @@ internal abstract unsafe class KernelDriver
 
     public abstract LuFactorization FactorLu(int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize);
 
+    /// <summary>Serial packing buffers with caller-chosen cache-blocking parameters.</summary>
+    public abstract GemmScratch Scratch(int mc, int kc, int nc);
+
+    /// <summary>The serial driver against a scratch the caller built.</summary>
+    public abstract void Gemm(
+        GemmScratch scratch, int m, int n, int k,
+        double alpha, double* a, int lda, double* b, int ldb, double beta, double* c, int ldc);
+
     /// <summary>A public-layer workspace pinned to this kernel.</summary>
     public abstract Workspace Workspace(bool multithreaded);
 
@@ -119,6 +127,14 @@ internal abstract unsafe class KernelDriver
 
         public override LuFactorization FactorLu(int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize) =>
             Lu.Factor<TKernel>(m, n, a, lda, gemm, blockSize);
+
+        public override GemmScratch Scratch(int mc, int kc, int nc) =>
+            GemmScratch.For<TKernel>(mc, kc, nc);
+
+        public override void Gemm(
+            GemmScratch scratch, int m, int n, int k,
+            double alpha, double* a, int lda, double* b, int ldb, double beta, double* c, int ldc) =>
+            Kernels.Gemm.Multiply<TKernel>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, scratch);
 
         public override Workspace Workspace(bool multithreaded) => Tensile.Workspace.ForKernel<TKernel>(multithreaded);
     }

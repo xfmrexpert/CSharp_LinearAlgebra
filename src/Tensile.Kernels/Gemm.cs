@@ -48,16 +48,28 @@ internal sealed unsafe class GemmScratch : IDisposable
     /// They are NOT tuned for any particular machine. Sweeping them is the
     /// second experiment, after the micro-kernel question is settled.
     /// </summary>
-    public static GemmScratch For<TKernel>() where TKernel : struct, IMicroKernel
+    public static GemmScratch For<TKernel>() where TKernel : struct, IMicroKernel =>
+        For<TKernel>(mc: 288, kc: 384, nc: 4096);
+
+    /// <summary>
+    /// The same buffers with block sizes chosen by the caller, for the sweep
+    /// the remarks above ask for. MC and NC are rounded up to the kernel's MR
+    /// and NR, since a packed block is whole micro-panels either way.
+    /// </summary>
+    /// <param name="mc">Row-block size, rounded up to MR.</param>
+    /// <param name="kc">Depth of a k-slab.</param>
+    /// <param name="nc">Column-block size, rounded up to NR.</param>
+    public static GemmScratch For<TKernel>(int mc, int kc, int nc)
+        where TKernel : struct, IMicroKernel
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mc);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(kc);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(nc);
+
         int mr = TKernel.Mr;
         int nr = TKernel.Nr;
 
-        int kc = 384;
-        int mc = RoundUp(288, mr);
-        int nc = RoundUp(4096, nr);
-
-        return new GemmScratch(mr, nr, mc, kc, nc);
+        return new GemmScratch(mr, nr, RoundUp(mc, mr), kc, RoundUp(nc, nr));
     }
 
     private static int RoundUp(int value, int multiple) =>

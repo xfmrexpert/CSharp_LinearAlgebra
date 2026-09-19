@@ -92,7 +92,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
 | `tests/Tensile.Tests/` | xunit.v3, 830 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
-| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep |
+| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
@@ -328,7 +328,10 @@ well- and ill-conditioned inputs.
 - **`Gemm.cs` still uses placeholder MC=288, KC=384.** The cache-derived
   KC=256/MC=144 used in `ParallelGemm` measured better on the 12700H at every
   size below 2048 (n=128: 47.0 vs 35.1 GFLOP/s). This has not been ported to
-  the serial path.
+  the serial path. `BlockSizeBenchmarks` now sweeps both values and their cross
+  terms; `GemmScratch.For<TKernel>(mc, kc, nc)` takes them explicitly, and the
+  GEMM contract checks that block sizes change the cutting-up and never the
+  answer. Run it pinned. *Not yet measured on the 12700H.*
 - **Small-n threading.** A work-based threshold *is* applied in
   `ParallelGemm.Multiply` —
   `Math.Clamp((int)(work / 8_000_000), 1, scratch.MaxThreads)` — with divisor
@@ -337,15 +340,38 @@ well- and ill-conditioned inputs.
   not been re-measured on the 12700H, so the earlier 0.8-1.0x figures may
   predate it.
 - **`GemmDispatch.ParallelThreshold` (4e6 flops) is derived, not measured.**
-  It decides serial vs threaded for every LU trailing update. Sweep it.
+  It decides serial vs threaded for every LU trailing update. Now a per-dispatch
+  property rather than a `const`, defaulting to `DefaultParallelThreshold`, so
+  a measurement can move it without a rebuild. `ParallelCrossoverBenchmarks`
+  measures the crossover directly instead of sweeping the threshold — running
+  both paths explicitly across shapes that bracket it, so the size where
+  threaded first wins IS the value to set. Two shape families, because they do
+  not agree: square, and the `m x m x 64` panels LU's trailing update actually
+  produces. *Not yet measured on the 12700H.*
 - **LU has not been run on the 12700H**, and its results table now needs
   re-taking anyway (see above).
-- **Reverse-order thread sweep not done** (see finding 7).
+- **Reverse-order thread sweep not done** (see finding 7). `ThreadScalingBenchmarks`
+  plus `TENSILE_BENCH_REVERSE=1` now makes it one command each way. Note the
+  reversal had to be a custom `IOrderer`: BenchmarkDotNet sorts cases by
+  parameter value before executing them, so reversing a `ParamsSource` list
+  changes nothing at all — verified by diffing the `// Benchmark:` lines of two
+  runs. *Not yet run on the 12700H.*
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
   LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
   which is strong evidence but not the same thing.
 - **The estimator's `Blas2` products are O(n^2 t) with no blocking.** Fine at
   the sizes that matter for `dgecon`, possibly not for `expm`'s inner loop.
+- **What the secure-by-design migration cost is still unmeasured.** Every GEMM
+  benchmark but one allocates with `NativeMemory` and calls the dispatch
+  directly, which skips POH storage, `Bind`, the `Operand` checks, the
+  workspace lock and the pinning seam — i.e. everything the migration added.
+  `ApiOverheadBenchmarks` closes that hole with three rows (native pointers /
+  POH storage direct / public API) so the layers can be told apart. All of it
+  is O(1) per call against O(n^3) work, so the ratio should converge to 1 as N
+  grows and any real cost should show at N=128; a ratio that does not converge
+  would mean per-element work, which is a defect rather than a tax. This is the
+  section 9 guardrail of `docs/security-design.md`. *Not yet measured on the
+  12700H.*
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small

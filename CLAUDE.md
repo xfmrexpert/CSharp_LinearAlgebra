@@ -243,28 +243,57 @@ A desktop part with real power headroom would tell a very different story.
 
 ## LU
 
-Verified on the verification container (single virtualised AVX2 core), **not
-yet run on the 12700H**:
+Re-taken on the 12700H, 2026-09-19: threaded (the trailing update goes through
+`GemmDispatch`, so sizes above `ParallelThreshold` use every core), unpinned,
+31 iterations, GFLOP/s from medians at (2/3)n^3 - n^2/2 - n/6 flops.
 
-| n | best nb | GFLOP/s | % of same-size GEMM |
+| n | nb=32 | nb=64 | nb=128 |
 | --- | --- | --- | --- |
-| 512 | 32 | 18.9 | 49% |
-| 1024 | 32 | 24.5 | 60% |
-| 2048 | 64 | 26.7 | 65% |
+| 256 | **20.16** | 17.54 | 13.49 |
+| 512 | **30.71** | 28.56 | 23.11 |
+| 1024 | 42.68 | **44.57** | 35.91 |
+| 2048 | 64.96 | **65.52** | 52.71 |
 
-LAPACK norm is roughly 70-80% of GEMM, so ~20% remains. Note the block-size
-optimum shifts with n (32 below 2048, 64 at 2048); a size-dependent default is
-probably right once measured on real hardware.
+The old container table (18.9 / 24.5 / 26.7 at 512 / 1024 / 2048, single
+virtualised AVX2 core) is superseded and not comparable — different machine,
+different thread count.
 
-**These numbers predate routing the trailing update through `ParallelGemm`, and
-the "% of same-size GEMM" column they came from compared serial LU against
-serial GEMM.** Both sides now go through `GemmDispatch`, so the ratio compares
-like with like and the whole table needs re-taking. Comparing a threaded LU
-against a serial GEMM reads as ~97% at n=2048, which measures the thread count
-and not the factorization.
+**The block-size ranking is only half settled, and the ordering says which
+half.** BenchmarkDotNet runs nb=32 before 64 before 128 within each size, so
+later block sizes run hotter (finding 7):
 
-Phase breakdown at n=2048, nb=64 after optimisation: GEMM 65%, panel 14%,
-swaps 10%, TRSM 11%.
+- **nb=64 at n>=1024 is credible**: it wins *despite* running second, into a
+  thermal headwind. An effect that survives a headwind is worth more than one
+  that rides a tailwind.
+- **nb=32 at n<=512 is not established**: it wins while running first, which
+  is the exact shape the serial block-size sweep produced and then reversed.
+- **nb=128 losing by 19-33% is mostly real**, because there is a mechanism
+  rather than just an ordering: the panel factorization is O(m*nb^2) level-2
+  work, so a wider panel moves more of the total into the slow unblocked
+  path. That deficit is also far larger than the ~12-14% thermal artifact
+  measured in the serial sweep.
+
+A descending run (`TENSILE_BENCH_REVERSE=1`) would settle the small-n
+crossover. Until then the honest statement is: nb=64 above n=1024, and the
+optimum below that is unknown.
+
+**The "% of same-size GEMM" column is still missing, deliberately.** This LU
+is threaded; the only GEMM figures taken so far are pinned single-core.
+Dividing threaded LU by single-core GEMM gives 114% at n=2048, which measures
+the thread count and not the factorization — the very error this table was
+being re-taken to remove. It needs threaded GEMM at matching sizes from
+`ThreadScalingBenchmarks`.
+
+What can be said without that column: threaded LU on 20 threads reaches
+65.5 GFLOP/s where one core's GEMM reaches 57.2. If threaded GEMM lands
+anywhere near the 150-175 the old threading table suggests, LU is at roughly
+40% of GEMM rather than LAPACK's 70-80%, which would make the serial panel
+and row interchanges the dominant cost and put real weight behind recursive
+panel factorization. Stated as a hypothesis, not a result.
+
+Phase breakdown at n=2048, nb=64 — GEMM 65%, panel 14%, swaps 10%, TRSM 11% —
+is from the old single-core container run and has NOT been re-taken threaded.
+Expect the serial phases to dominate more once they are.
 
 Residuals: `||PA-LU||_F / ||A||_F` worst 1.80e-15, `||Ax-b||_inf /
 (||A||_inf ||x||_inf)` worst 3.63e-16, across 11 shapes (square, tall, wide,
@@ -439,8 +468,11 @@ well- and ill-conditioned inputs.
   threaded first wins IS the value to set. Two shape families, because they do
   not agree: square, and the `m x m x 64` panels LU's trailing update actually
   produces. *Not yet measured on the 12700H.*
-- **LU has not been run on the 12700H**, and its results table now needs
-  re-taking anyway (see above).
+- **LU's block size is settled only above n=1024** (nb=64, credible because it
+  wins against the thermal gradient). Below that, nb=32 won with the gradient
+  behind it, which the serial sweep taught us not to trust; a descending run
+  would settle it. And the "% of same-size GEMM" column still needs threaded
+  GEMM figures at matching sizes before it can be computed at all.
 - **Reverse-order thread sweep not done** (see finding 7). `ThreadScalingBenchmarks`
   plus `TENSILE_BENCH_REVERSE=1` now makes it one command each way. Note the
   reversal had to be a custom `IOrderer`: BenchmarkDotNet sorts cases by

@@ -40,16 +40,29 @@ internal sealed unsafe class GemmScratch : IDisposable
     }
 
     /// <summary>
-    /// Cache-blocking parameters. These are placeholders in the spirit of the
-    /// BLIS analytical model (Low et al., TOMS 2016): KC is chosen so an A
-    /// micro-panel plus a B micro-panel stay resident in L1/L2, MC so the
-    /// packed A block fits L2, NC so the packed B block fits L3.
+    /// Cache-blocking parameters, in the spirit of the BLIS analytical model
+    /// (Low et al., TOMS 2016): KC is chosen so an A micro-panel plus a B
+    /// micro-panel stay resident in L1/L2, MC so the packed A block fits L2,
+    /// NC so the packed B block fits L3.
     ///
-    /// They are NOT tuned for any particular machine. Sweeping them is the
-    /// second experiment, after the micro-kernel question is settled.
+    /// MC=144 is measured, on a 12700H P-core: it beat the previous
+    /// placeholder MC=288 by 9.5% at n=2048, in both sweep directions
+    /// (+9.6% ascending, +9.5% descending). It is also what
+    /// <see cref="ParallelGemmScratch"/> derives from cache geometry, so the
+    /// two paths now agree.
+    ///
+    /// KC=384 is NOT measured and stays as it was. Over the same sweep,
+    /// KC=256 and KC=384 came out within 1% of each other at every size, in
+    /// both directions -- inside the noise, so there is nothing to choose
+    /// between them and changing it would be unmeasured churn.
+    ///
+    /// At n=128 and n=512 no block-size choice made a reliable difference at
+    /// all: the ascending sweep showed MC=144 ahead by 12-14% there, and the
+    /// descending sweep showed it 1% behind. That reversal is thermal drift,
+    /// not blocking -- see CLAUDE.md finding 7.
     /// </summary>
     public static GemmScratch For<TKernel>() where TKernel : struct, IMicroKernel =>
-        For<TKernel>(mc: 288, kc: 384, nc: 4096);
+        For<TKernel>(mc: 144, kc: 384, nc: 4096);
 
     /// <summary>
     /// The same buffers with block sizes chosen by the caller, for the sweep

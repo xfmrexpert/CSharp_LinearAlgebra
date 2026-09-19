@@ -149,9 +149,15 @@ secure-by-design work, and `ApiOverheadBenchmarks` is what measures that.
 
 **n=128 is the one place BLIS is clearly ahead** (85%), and it is also the
 size where the managed side is furthest from its own ceiling (79% against
-BLIS's 93%). The serial path still uses the placeholder MC=288, KC=384 — both
-larger than the entire 128x128 operand — which is the obvious suspect and
-exactly what `BlockSizeBenchmarks` sweeps.
+BLIS's 93%). The obvious suspect was the serial path's placeholder MC=288,
+KC=384, both larger than the entire 128x128 operand — **and the sweep below
+ruled it out.** At n=128 all four block-size combinations land within 1% of
+each other. Whatever costs the managed side 15% at n=128, it is not cache
+blocking. Per-call overhead that O(n^3) has not yet amortised is the next
+hypothesis, and `ApiOverheadBenchmarks` measures a related quantity.
+
+Note this table was taken with the old MC=288; the serial default is now
+MC=144, so it needs a quick re-run to stay current.
 
 Note BLIS has no Alder Lake sub-configuration and falls back to its `haswell`
 config, whose double micro-kernel is 6x8 AVX2 assembly — the same geometry and
@@ -165,6 +171,42 @@ worth one number — 1-3% at n>=256, and exactly 0 at n=128, where
 `work = 2.1e6` falls below `ParallelThreshold` and the dispatch takes the
 serial path outright (confirmed by the threaded row allocating nothing at all
 at that size). Real scaling comes from `ThreadScalingBenchmarks`, unpinned.
+
+## Serial cache blocking: MC measured, KC is noise
+
+Swept on the 12700H, pinned, 31 iterations, run twice — ascending and
+descending (`TENSILE_BENCH_REVERSE=1`) — because a one-directional sweep
+cannot tell a block size from a cooler. GFLOP/s from medians.
+
+MC=144 against the old placeholder MC=288, best KC for each:
+
+| n | ascending | descending | verdict |
+| --- | --- | --- | --- |
+| 128 | MC144 +13.8% | MC144 -0.7% | sign flips: thermal |
+| 512 | MC144 +12.3% | MC144 -1.5% | sign flips: thermal |
+| 2048 | MC144 +9.6% | MC144 **+9.5%** | **survives: real** |
+
+**Only n=2048 survives reversal, and it survives to a tenth of a percent.**
+MC=144 is now the serial default, matching what `ParallelGemm` already
+derived from cache geometry. KC=256 and KC=384 came out within 1% of each
+other everywhere in both directions, so KC stays at 384 — there is nothing to
+choose between them, and moving it would be unmeasured churn.
+
+The ascending-only run would have reported "MC=144 is 10-14% better at every
+size". Two of those three numbers were the machine warming up. This is the
+first time the reverse-order test of finding 7 has actually been run, and it
+overturned two results out of three.
+
+One thing this sweep did NOT explain: `BlockSizeBenchmarks` at MC=288/KC=384
+is bit-for-bit the same configuration and driver as `GemmBenchmarks`'s serial
+row, yet ran 8-18% slower in every attempt, including the clean
+high-priority one. Not tiering — `Gemm.Multiply`, `ParallelGemm.Multiply` and
+both `GemmDispatch` entry points all carry `AggressiveOptimization`, so that
+was checked and ruled out. Most likely the single-core GEMM table was taken
+on the coldest machine of the session. It does not affect the MC conclusion,
+which is a within-run comparison replicated in both directions, but it does
+mean absolute GFLOP/s are not comparable across benchmark classes in one
+sitting.
 
 ## Threading: power-limited, not algorithm-limited
 
@@ -263,9 +305,27 @@ well- and ill-conditioned inputs.
    `taskset -c 0` makes a thread-count sweep degenerate. Pin for single-thread
    comparisons; do not pin for scaling sweeps.
 
-7. **Sequential thread-count sweeps confound thermal state with thread count**
-   on a laptop part. Later configurations run heat-soaked. Re-running the sweep
-   in reverse order is the cheap decisive test; this has NOT been done yet.
+7. **A one-directional sweep cannot tell a parameter from a cooler.** On a
+   laptop part, later configurations run heat-soaked, so any sweep confounds
+   its parameter with thermal state. Re-running in reverse order is the cheap
+   decisive test, and it is no longer hypothetical: the serial block-size
+   sweep reported MC=144 ahead by 13.8% at n=128, 12.3% at n=512 and 9.6% at
+   n=2048 going up, and by -0.7%, -1.5% and +9.5% coming down. **Two of the
+   three results were the machine warming up.** Only the n=2048 effect was
+   real, and it reproduced to a tenth of a percent.
+
+   The mechanism is worth stating because it is not obvious: BenchmarkDotNet
+   sorts cases by parameter value before executing them, so the whole first
+   half of a two-value sweep runs on a cooler machine than the second half.
+   Reversing a `ParamsSource` list does not help — BDN re-sorts it. The
+   reversal has to be a custom `IOrderer` overriding `GetExecutionOrder`
+   (`ThermalOrderer`, driven by `TENSILE_BENCH_REVERSE=1`), which was itself
+   verified by diffing the `// Benchmark:` lines of two runs rather than
+   assumed to work.
+
+   Running as root so BDN can raise process priority tightened dispersion
+   from 1.4-8.4% StdDev to roughly 1%, and is worth doing for any sweep whose
+   effect size is in single-digit percent.
 
 8. **A heuristic estimator needs invariant tests, not accuracy tests.**
    `normest1` returns a lower bound, so underestimating is correct behaviour
@@ -357,13 +417,12 @@ well- and ill-conditioned inputs.
 
 # Open items
 
-- **`Gemm.cs` still uses placeholder MC=288, KC=384.** The cache-derived
-  KC=256/MC=144 used in `ParallelGemm` measured better on the 12700H at every
-  size below 2048 (n=128: 47.0 vs 35.1 GFLOP/s). This has not been ported to
-  the serial path. `BlockSizeBenchmarks` now sweeps both values and their cross
-  terms; `GemmScratch.For<TKernel>(mc, kc, nc)` takes them explicitly, and the
-  GEMM contract checks that block sizes change the cutting-up and never the
-  answer. Run it pinned. *Not yet measured on the 12700H.*
+- ~~**`Gemm.cs` uses placeholder MC=288, KC=384.**~~ *Closed.* Swept on the
+  12700H in both directions; MC=144 is a real 9.5% win at n=2048 and is now
+  the serial default, KC stays 384 because 256 and 384 are within 1% of each
+  other everywhere. See "Serial cache blocking" above. What remains is that
+  NC=4096 has never been varied at all, and that the sweep covered only three
+  sizes — a size-dependent MC may still be worth having.
 - **Small-n threading.** A work-based threshold *is* applied in
   `ParallelGemm.Multiply` —
   `Math.Clamp((int)(work / 8_000_000), 1, scratch.MaxThreads)` — with divisor

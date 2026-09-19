@@ -212,43 +212,45 @@ sitting.
 
 Re-taken on the 12700H, 2026-09-19: unpinned (finding 6), root so BDN could
 raise priority, 31 iterations, `ParallelGemm` driven directly so the dispatch
-threshold cannot divert a row. GFLOP/s from medians.
+threshold cannot divert a row. **Run in both directions** and averaged, since
+thread count and execution order are the same variable in an ascending sweep.
+GFLOP/s from means (the descending report carried no median column).
 
-| threads | n=512 | n=2048 |
-| --- | --- | --- |
-| 1 | 48.21 | 44.32 |
-| 2 | 87.72 | 86.49 |
-| 4 | 118.62 | 133.98 |
-| 6 | 133.42 | **170.65** |
-| 8 | **150.05** | 151.33 |
-| 12 | 136.61 | 145.81 |
-| 16 | 128.62 | 139.72 |
-| 20 | 121.79 | 142.25 |
+| threads | n=2048 asc | n=2048 desc | n=2048 mean | n=512 mean |
+| --- | --- | --- | --- | --- |
+| 1 | 45.34 | 45.94 | 45.64 | 52.46 |
+| 2 | 86.42 | 87.70 | 87.06 | 81.57 |
+| 4 | 133.25 | 130.20 | 131.72 | 115.15 |
+| 6 | 170.43 | 162.52 | **166.47** | 128.93 |
+| 8 | 151.17 | 146.46 | 148.81 | **144.64** |
+| 12 | 145.88 | 148.32 | 147.10 | 128.80 |
+| 16 | 140.55 | 143.96 | 142.25 | 124.20 |
+| 20 | 142.20 | 151.81 | 147.00 | 126.68 |
 
-Peak 170.65 GFLOP/s at 6 threads (n=2048) and 150.05 at 8 (n=512), then a
-17-19% decline out to 20 threads. The peak location and magnitude replicate
-the earlier campaign (which also peaked at 6 threads, at 173.9), so
-**~150-175 GFLOP/s at 6-8 threads is this machine, twice measured.**
+**Peak at 6 threads for n=2048 and 8 for n=512, picked independently by both
+directions.** The location is solid; a third campaign (the original one) also
+peaked at 6. ~145-165 GFLOP/s at 6-8 threads is this machine.
+
+**The decline past the peak is real, but a one-directional sweep overstates
+it by about half.** Off-peak at 20 threads reads 17-19% ascending, 6-7%
+descending, and **12% averaged**. The crossover signature is textbook: at 6
+threads the ascending run reads higher (it ran early and cool), at 20 threads
+the descending run reads higher (same reason), and averaging cancels it. The
+per-configuration spread between directions was 1.3-12.3%, which is a
+useful measure of the thermal gradient across one sweep on this part.
 
 **The 1-thread row is not a valid baseline and speedups quoted against it are
 inflated.** Unpinned, a `Parallel.For` with `MaxDegreeOfParallelism = 1` is
-scheduled wherever the OS likes, including onto a Gracemont E-core — and the
-n=2048 1-thread row has the worst dispersion in the table at 6.6% StdDev,
-which is what that drift looks like. It reads 44.32 GFLOP/s against the
-57.22 measured pinned on a P-core, so it understates the baseline by 29% and
+scheduled wherever the OS likes, including onto a Gracemont E-core. It reads
+45.34 ascending and 45.94 descending — reproducible, and both far below the
+57.22 measured pinned on a P-core, so it understates the baseline by ~25% and
 overstates every speedup by the same factor. Against the pinned figure the
-real peak speedup is 2.98x on 6 threads (50% per-thread efficiency), not the
-3.85x the in-run baseline suggests.
+real peak speedup is **2.91x on 6 threads, 49% per-thread efficiency**, not
+the 3.6x the in-run baseline suggests.
 
 This is the sharp edge of finding 6: you must not pin a scaling sweep, and
 the 1-thread row of an unpinned sweep is therefore worthless as a
 denominator. Take the baseline from a separate pinned run.
-
-*The decline beyond the peak is NOT yet confirmed.* Thread count and
-execution order are the same variable in this sweep — higher thread counts
-run both later and hotter — which is exactly the confound of finding 7. A
-descending run is needed before the shape past the peak can be trusted. The
-peak location is safe (it reproduces across two campaigns); the tail is not.
 
 ## LU
 
@@ -286,23 +288,24 @@ A descending run (`TENSILE_BENCH_REVERSE=1`) would settle the small-n
 crossover. Until then the honest statement is: nb=64 above n=1024, and the
 optimum below that is unknown.
 
-**Against threaded GEMM at the same thread count, LU is at 46%** — and the
+**Against threaded GEMM at the same thread count, LU is at 45%** — and the
 arithmetic explains the whole gap without implicating the factorization.
 
 | n | LU (best nb) | threaded GEMM, 20 threads | ratio |
 | --- | --- | --- | --- |
-| 512 | 30.71 | 121.79 | 25% |
-| 2048 | 65.52 | 142.25 | **46%** |
+| 512 | 30.71 | 126.68 | 24% |
+| 2048 | 65.52 | 147.00 | **45%** |
 
-LAPACK's norm is 70-80%, so 46% looks alarming. It is not a defect, it is
-Amdahl, and the numbers close:
+(GEMM figures averaged over both sweep directions.) LAPACK's norm is 70-80%,
+so 45% looks alarming. It is not a defect, it is Amdahl, and the numbers
+close:
 
-- Threaded GEMM is 2.49x single-core GEMM (142.25 / 57.22).
+- Threaded GEMM is 2.57x single-core GEMM (147.00 / 57.22).
 - Apply that to the GEMM share alone of the phase breakdown below — 65% GEMM,
   35% panel + swaps + TRSM, all three of which are serial — and the
-  factorization should speed up by 100 / (65/2.49 + 35) = **1.64x**.
+  factorization should speed up by 100 / (65/2.57 + 35) = **1.66x**.
 - Working backwards from the observed 65.52 threaded, serial LU would be
-  **39.95 GFLOP/s, or 69.8% of serial GEMM** — squarely inside LAPACK's band.
+  **39.5 GFLOP/s, or 69.1% of serial GEMM** — squarely inside LAPACK's band.
 
 So the factorization itself is healthy at roughly 70% of GEMM, exactly as it
 should be, and the threaded ratio collapses only because barely two thirds of
@@ -393,6 +396,17 @@ well- and ill-conditioned inputs.
    Running as root so BDN can raise process priority tightened dispersion
    from 1.4-8.4% StdDev to roughly 1%, and is worth doing for any sweep whose
    effect size is in single-digit percent.
+
+   Reversal does not always overturn a result; the second sweep run both ways
+   shows the other outcome. In the thread-count sweep the peak location (6
+   threads at n=2048, 8 at n=512) came out identical in both directions, so it
+   is solid — but the *magnitude* of the post-peak decline read 17-19%
+   ascending, 6-7% descending, and 12% averaged. The one-directional figure
+   was roughly twice the truth. So: reversal can flip a sign (block sizes) or
+   merely halve a magnitude (threads), and averaging the two directions is the
+   cheapest way to get a number worth quoting. Per-configuration spread
+   between directions was 1.3-12.3% here, which is the thermal gradient's
+   size on this part.
 
 8. **A heuristic estimator needs invariant tests, not accuracy tests.**
    `normest1` returns a lower bound, so underestimating is correct behaviour
@@ -511,12 +525,12 @@ well- and ill-conditioned inputs.
   behind it, which the serial sweep taught us not to trust; a descending run
   would settle it. And the "% of same-size GEMM" column still needs threaded
   GEMM figures at matching sizes before it can be computed at all.
-- **The thread sweep's tail needs a descending run.** The ascending sweep is
-  taken (see "Threading" above) and its peak is trustworthy — 6-8 threads,
-  150-175 GFLOP/s, replicated across two campaigns. The 17-19% decline past
-  the peak is not: thread count and execution order are the same variable, so
-  higher counts run both later and hotter. `TENSILE_BENCH_REVERSE=1` settles
-  it in one command.
+- ~~**The thread sweep's tail needs a descending run.**~~ *Closed.* Run both
+  ways and averaged: peak at 6 threads (n=2048) and 8 (n=512), identical in
+  both directions; decline past the peak is 12%, not the 17-19% the ascending
+  run alone reported. What remains unmeasured is the E-core / P-core / SMT
+  decomposition of the old table — this sweep varied only the worker count,
+  not which cores it was allowed to use.
 - **The LU phase breakdown is single-core and from the old container.** It is
   now load-bearing — the Amdahl argument that explains LU's 46% of threaded
   GEMM rests on the 65/14/10/11 split — so re-taking it threaded on this

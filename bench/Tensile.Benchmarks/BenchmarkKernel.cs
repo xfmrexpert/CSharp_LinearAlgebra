@@ -32,6 +32,9 @@ internal static unsafe class BenchmarkKernel
         : HasAvx2 ? GemmDispatch.Multithreaded<Avx2Kernel8x6>(threads)
         : GemmDispatch.Multithreaded<ScalarKernel4x4>(threads);
 
+    /// <summary>A serial-only dispatch over packing buffers the caller built.</summary>
+    public static GemmDispatch SerialWith(GemmScratch scratch) => GemmDispatch.SerialWith(scratch);
+
     /// <summary>Serial packing buffers with explicit cache-blocking parameters.</summary>
     public static GemmScratch Scratch(int mc, int kc, int nc) =>
         HasAvx512 ? GemmScratch.For<Avx512Kernel16x8>(mc, kc, nc)

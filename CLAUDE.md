@@ -160,52 +160,78 @@ the driver itself at small n — packing setup and loop overhead that BLIS may
 amortise better, or a small-matrix special path on its side. That is where to
 look next, and nothing measured so far bears on it.
 
-Note this table was taken with the old MC=288; the serial default is now
-MC=144, so it needs a quick re-run to stay current. **That re-run has been
-attempted and did not land** — see immediately below.
+Note this table was taken with the old MC=288 and the serial default is now
+MC=144, so it was re-run. **Both attempts are below, and between them they have
+reopened the MC question rather than settling it.**
 
-### The 2026-09-21 re-run was unpinned, so it does not replace the table
+### Attempt 1, 2026-09-21: unpinned, and therefore void
 
-Both classes were re-run on the 12700H with MC=144 in place. The run was not
-pinned, so it cannot answer the MC question: the environment and the parameter
-changed together.
-
-The tell is inside the run itself. Its threaded rows read 0.64 / 0.38 / 0.36 /
+The run was not pinned, so the environment and the parameter changed together.
+The tell is inside the run itself: its threaded rows read 0.64 / 0.38 / 0.36 /
 0.34 of serial at n=256 and up — a 2.6-3x speedup — and `taskset -c 0` makes
-`ProcessorCount` 1, which makes that arithmetically impossible. The previous
-pinned run's threaded rows sat 1-3% *slower* than serial, which is what
-fork/join against a single worker looks like. A 3x speedup is a machine with
-cores on it.
+`ProcessorCount` 1, which makes that arithmetically impossible. C# read 38.7 /
+44.3 / 49.0 / 46.4 / 45.9 and BLIS 48.3 / 46.7 / 46.5 / 43.9 / 44.1, both 13-23%
+under the pinned table, at 4-11% StdDev against the pinned run's 1.2-2.0%. The
+same run's *threaded* row at n=2048 read 137.9 GFLOP/s, exactly where every
+other unpinned threaded measurement of this machine sits, so the machine was
+not slow — the serial rows were. See finding 6.
 
-| n | C# 1 thread | BLIS 1-thread | ratio, means | ratio, medians | C# vs pinned | BLIS vs pinned |
-| --- | --- | --- | --- | --- | --- | --- |
-| 128 | 38.69 | 48.32 | 80% | 72% | -21.9% | -17.3% |
-| 256 | 44.30 | 46.68 | 95% | 95% | -18.4% | -16.4% |
-| 512 | 49.02 | 46.49 | 105% | 105% | -12.9% | -19.5% |
-| 1024 | 46.38 | 43.94 | 106% | 105% | -19.0% | -21.3% |
-| 2048 | 45.93 | 44.10 | 104% | 98% | -19.7% | -23.2% |
+### Attempt 2, 2026-09-21: pinned, and it disagrees with the block-size sweep
 
-(GFLOP/s from means, since dispersion here is 4-11% StdDev against the pinned
-run's 1.2-2.0% and the medians are correspondingly unsteady — at n=128 the C#
-median is *above* its mean.)
+Pinned properly this time — the threaded rows read 0.99-1.05 of serial, which
+is what `ProcessorCount == 1` looks like, and is the same tell read the other
+way. BenchmarkDotNet's `DefaultJob` rather than the 31-iteration job, so fewer
+samples than the methodology asks for; StdDev 1.9-6.5% (C#) and 2.2-5.1%
+(BLIS). GFLOP/s from means.
 
-**Both sides are down 13-23%, which is the environment and not MC=144.** Three
-things say so. The drop is on both sides, and BLIS did not change at all
-between the runs. It has no size dependence worth speaking of, where a
-cache-blocking parameter would. And the same run's threaded row at n=2048
-reads 137.9 GFLOP/s, right where every other unpinned threaded measurement of
-this machine has put it (ApiOverhead 136.8, thread sweep 147.0) — so the
-machine was not slow, the *serial rows* were.
+| n | C# MC=144 | BLIS | ratio | ratio on 09-19 (MC=288) | change |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 43.31 | 47.93 | 0.904 | 0.849 | **+0.055** |
+| 256 | 46.54 | 45.90 | 1.014 | 0.972 | **+0.042** |
+| 512 | 44.57 | 47.89 | 0.931 | 0.976 | -0.045 |
+| 1024 | 44.73 | 49.59 | 0.902 | 1.025 | **-0.123** |
+| 2048 | 45.49 | 50.94 | 0.893 | 0.997 | **-0.104** |
 
-**What the run does establish is that the parity shape survives a different
-environment.** Behind at n=128 (80%, against 85% pinned), parity at n=256, and
-level or fractionally ahead from 512 up. Read the 104-106% as parity, not as a
-lead: 5% is well inside 10% dispersion. That the one clear deficit lands at
-n=128 in both campaigns, taken months and environments apart, is the most
-useful thing here — it is the finding that has now replicated.
+**Read the ratio column and nothing else: the absolute figures moved on both
+sides again.** BLIS is an unchanged binary on an unchanged machine and it came
+in 11-18% below its own 09-19 numbers, so this sitting was ~15% slower
+throughout. That is the third recording of sitting-level drift larger than any
+effect being chased, and it is now the single most expensive fact about
+measuring on this machine.
 
-To actually re-take the table: `taskset -c 0`, root for priority, both classes
-in the same sitting.
+**Within the sitting, the managed side gained 4-6 points of ratio at n<=256
+and lost 10-12 at n>=1024.** That is the shape a smaller MC predicts, and it
+has a mechanism. The packed A block is MC*KC*8 bytes: 442 KiB at MC=144 and
+884 KiB at MC=288, against a Golden Cove P-core's 1.25 MiB L2. Pinned, one
+thread owns all of it, so MC=288 fills it and MC=144 leaves half of it idle
+while doubling the number of ic iterations — and each of those streams the
+whole packed B panel again. MC=144 was derived for a Gracemont E-core's quarter
+share of its cluster's 2 MiB L2, which is the right target for the threaded
+path and quite possibly the wrong one for a pinned P-core.
+
+**But this directly contradicts the block-size sweep**, which A/B'd exactly
+these two values, pinned, in both directions, and put MC=144 ahead by 9.6% and
+9.5% at n=2048. Both cannot be right about the shipped path, and the difference
+between them is not MC: the sweep drives `Gemm.Multiply` with an explicit
+scratch, while `GemmBenchmarks` goes through `GemmDispatch`, which is what
+every caller of the library takes. Those two have disagreed by 8-18% on
+identical configuration before, recorded below as unexplained. That gap has
+stopped being a curiosity and become the thing the MC decision rests on.
+
+**MC=144 is not being reverted on this evidence**, because the evidence is a
+between-sitting ratio shift confounded with a job-configuration change, against
+a within-run A/B replicated in both directions. What has changed is that
+`BlockSizeBenchmarks` now measures both arms — the driver and the dispatch — at
+each MC, in one class and one sitting. If they agree there, the 8-18% was drift
+between processes and the sweep's verdict stands. If the dispatch is really
+slower, that is a defect in the path everyone uses and the block size chosen on
+the driver was never the right one to ship. Run it pinned, both directions,
+as root:
+
+```
+sudo taskset -c 0 dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*BlockSize*'
+sudo TENSILE_BENCH_REVERSE=1 taskset -c 0 dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*BlockSize*'
+```
 
 Note BLIS has no Alder Lake sub-configuration and falls back to its `haswell`
 config, whose double micro-kernel is 6x8 AVX2 assembly — the same geometry and
@@ -245,16 +271,23 @@ size". Two of those three numbers were the machine warming up. This is the
 first time the reverse-order test of finding 7 has actually been run, and it
 overturned two results out of three.
 
-One thing this sweep did NOT explain: `BlockSizeBenchmarks` at MC=288/KC=384
-is bit-for-bit the same configuration and driver as `GemmBenchmarks`'s serial
-row, yet ran 8-18% slower in every attempt, including the clean
-high-priority one. Not tiering — `Gemm.Multiply`, `ParallelGemm.Multiply` and
-both `GemmDispatch` entry points all carry `AggressiveOptimization`, so that
-was checked and ruled out. Most likely the single-core GEMM table was taken
-on the coldest machine of the session. It does not affect the MC conclusion,
-which is a within-run comparison replicated in both directions, but it does
-mean absolute GFLOP/s are not comparable across benchmark classes in one
-sitting.
+One thing this sweep did NOT explain, and it has since become load-bearing:
+`BlockSizeBenchmarks` at MC=288/KC=384 is the same configuration as
+`GemmBenchmarks`'s serial row, yet ran 8-18% slower in every attempt,
+including the clean high-priority one. Not tiering — `Gemm.Multiply`,
+`ParallelGemm.Multiply` and both `GemmDispatch` entry points all carry
+`AggressiveOptimization`, so that was checked and ruled out. It was written off
+as the single-core GEMM table having been taken on the coldest machine of the
+session.
+
+That write-off is no longer safe. The two classes are not in fact bit-for-bit
+the same call: this one drives `Gemm.Multiply` with an explicit scratch, and
+`GemmBenchmarks` goes through `GemmDispatch`. When the pinned re-run above
+disagreed with this sweep about MC, the disagreement ran exactly along that
+seam. `BlockSizeBenchmarks` now measures both arms at each MC in one class, so
+the next run of it answers whether the gap is a real cost in the dispatch or
+drift between two processes. Until it does, absolute GFLOP/s are not comparable
+across benchmark classes and neither, it turns out, are block-size verdicts.
 
 ## What the secure-by-design migration cost: nothing measurable
 
@@ -668,12 +701,17 @@ well- and ill-conditioned inputs.
 
 # Open items
 
-- ~~**`Gemm.cs` uses placeholder MC=288, KC=384.**~~ *Closed.* Swept on the
-  12700H in both directions; MC=144 is a real 9.5% win at n=2048 and is now
-  the serial default, KC stays 384 because 256 and 384 are within 1% of each
-  other everywhere. See "Serial cache blocking" above. What remains is that
-  NC=4096 has never been varied at all, and that the sweep covered only three
-  sizes — a size-dependent MC may still be worth having.
+- **`Gemm.cs`'s serial MC is unsettled again.** It was closed: swept in both
+  directions, MC=144 a real 9.5% win at n=2048, shipped as the serial default.
+  Then the pinned GEMM re-run with MC=144 in place lost 10-12 points of ratio
+  against BLIS at n>=1024, which is the opposite sign. The two measurements
+  differ in which path they drive — the sweep the driver, the re-run the
+  dispatch — so the open question is really the 8-18% driver/dispatch gap, and
+  `BlockSizeBenchmarks` now measures both arms at each MC in one class to
+  settle it. MC=144 stays shipped meanwhile; a between-sitting ratio shift does
+  not outweigh a bidirectional within-run A/B. KC is settled at 384 (256 within
+  1% everywhere, both directions) and is no longer swept. NC=4096 has still
+  never been varied, and MC has been measured at only three sizes.
 - ~~**Small-n threading.**~~ *Mostly closed.* The dispatch now keeps
   everything below 2^24 of work on the serial path, which is measured correct
   at every size tested from n=64 to n=192 (serial ahead 7-17%). n=128 in
@@ -698,6 +736,11 @@ well- and ill-conditioned inputs.
   size-dependent — 32 below order 1024, 64 at or above — where the flat nb=64
   had been costing 11-13% on smaller factorizations. What is still unmeasured
   is the crossover's exact location, which lies somewhere in (512, 1024].
+- **The 8-18% gap between driving the GEMM driver and driving the dispatch is
+  unexplained**, and the serial MC decision now rests on it. Tiering is ruled
+  out. `BlockSizeBenchmarks` carries both arms as of this commit; one pinned
+  bidirectional run of it either dissolves the gap into inter-process drift or
+  finds a real per-call cost in the path every caller takes.
 - ~~**The thread sweep's tail needs a descending run.**~~ *Closed.* Run both
   ways and averaged: peak at 6 threads (n=2048) and 8 (n=512), identical in
   both directions; decline past the peak is 12%, not the 17-19% the ascending

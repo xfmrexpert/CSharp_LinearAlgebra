@@ -65,6 +65,25 @@ internal sealed unsafe class GemmDispatch : IDisposable
         new(GemmScratch.For<TKernel>(), null);
 
     /// <summary>
+    /// Single-threaded only, over packing buffers the caller built. Takes
+    /// ownership of them: disposing the dispatch disposes the scratch.
+    ///
+    /// This exists so a benchmark can drive the *shipped* dispatch path at
+    /// block sizes other than the defaults, which turns out to matter: a sweep
+    /// that calls the driver directly and a sweep that goes through here have
+    /// disagreed by 8-18% on identical configuration, and until that is
+    /// explained, a block size chosen on the driver is not known to be the
+    /// right one for the path callers actually take.
+    /// </summary>
+    /// <param name="serial">Packing buffers; this dispatch owns them from here.</param>
+    public static GemmDispatch SerialWith(GemmScratch serial)
+    {
+        ArgumentNullException.ThrowIfNull(serial);
+
+        return new GemmDispatch(serial, null);
+    }
+
+    /// <summary>
     /// Multi-threaded above <see cref="ParallelThreshold"/>, serial below it.
     /// </summary>
     public static GemmDispatch Multithreaded<TKernel>(int threads = 0)

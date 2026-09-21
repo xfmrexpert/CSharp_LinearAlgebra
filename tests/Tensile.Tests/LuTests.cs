@@ -232,6 +232,109 @@ public abstract unsafe class LuContract<TCase> where TCase : struct, IKernelCase
         Assert.True(FactorizationResidual(lu, factors, original) < Tolerance);
     }
 
+    /// <summary>
+    /// Phase timing is an instrument, so what must hold of it is structural
+    /// rather than numeric: the four phases are charged out of intervals of
+    /// one loop, so their sum cannot exceed that loop's own total, and the
+    /// residue between the two is what <see cref="LuPhaseTimings.Unattributed"/>
+    /// reports. Asserting on the durations themselves would be asserting on the
+    /// machine.
+    /// </summary>
+    [Fact]
+    public void PhaseTimingsAccountForTheWholeLoop()
+    {
+        const int n = 256;
+        const int blockSize = 32;
+
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 77);
+        using var factors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var timings = new LuPhaseTimings();
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize, timings);
+
+        Assert.Equal(n / blockSize, timings.BlockSteps);
+        Assert.True(timings.Total > 0, "the blocked loop took no measurable time at all");
+
+        long phases = timings.Panel + timings.Swaps + timings.Triangular + timings.Gemm;
+
+        Assert.True(phases <= timings.Total, $"phases {phases} exceed the loop total {timings.Total}");
+        Assert.Equal(timings.Total - phases, timings.Unattributed);
+
+        double shares = timings.Share(timings.Panel) + timings.Share(timings.Swaps)
+            + timings.Share(timings.Triangular) + timings.Share(timings.Gemm)
+            + timings.Share(timings.Unattributed);
+
+        Assert.Equal(100.0, shares, 9);
+
+        // The instrumented run must still be a factorization, not merely timed.
+        Assert.True(FactorizationResidual(lu, factors, original) < Tolerance);
+    }
+
+    /// <summary>
+    /// Collecting the timings must not perturb what is being timed.
+    ///
+    /// Bit-identical is the right assertion here and only here: this is one
+    /// code path run twice, not two paths compared, so every product is summed
+    /// in the same order both times. Any difference at all would mean the
+    /// instrument had changed the arithmetic.
+    /// </summary>
+    [Fact]
+    public void CollectingPhaseTimingsDoesNotChangeTheFactorization()
+    {
+        const int n = 96;
+        const int blockSize = 16;
+
+        using var original = TestMatrix.Random(n, n, seed: 78);
+        using var timedFactors = original.Clone();
+        using var untimedFactors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var timed = Kernel.FactorLu(n, n, timedFactors.Data, timedFactors.Stride, gemm, blockSize, new LuPhaseTimings());
+        var untimed = Kernel.FactorLu(n, n, untimedFactors.Data, untimedFactors.Stride, gemm, blockSize);
+
+        Assert.Equal(untimed.Pivots, timed.Pivots);
+        Assert.Equal(0.0, timedFactors.MaxDifference(untimedFactors));
+        Assert.Equal(untimed.SingularColumn, timed.SingularColumn);
+        Assert.Equal(untimed.SmallestPivot, timed.SmallestPivot);
+        Assert.Equal(untimed.LargestPivot, timed.LargestPivot);
+    }
+
+    /// <summary>
+    /// Pooling over repetitions is how the diagnostics report gets a stable
+    /// split out of runs that are individually noisy, so the sum has to be a
+    /// sum of every field rather than of the ones that happened to be needed.
+    /// </summary>
+    [Fact]
+    public void PhaseTimingsPoolAcrossRuns()
+    {
+        const int n = 128;
+        const int blockSize = 32;
+
+        using var gemm = Kernel.Serial();
+
+        var pooled = new LuPhaseTimings();
+        var separate = new LuPhaseTimings[3];
+
+        for (int rep = 0; rep < separate.Length; rep++)
+        {
+            using var factors = TestMatrix.RandomDiagonallyDominant(n, seed: 80 + rep);
+
+            separate[rep] = new LuPhaseTimings();
+            _ = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize, separate[rep]);
+
+            pooled.Add(separate[rep]);
+        }
+
+        Assert.Equal(separate.Sum(t => t.Panel), pooled.Panel);
+        Assert.Equal(separate.Sum(t => t.Swaps), pooled.Swaps);
+        Assert.Equal(separate.Sum(t => t.Triangular), pooled.Triangular);
+        Assert.Equal(separate.Sum(t => t.Gemm), pooled.Gemm);
+        Assert.Equal(separate.Sum(t => t.Total), pooled.Total);
+        Assert.Equal(separate.Sum(t => t.BlockSteps), pooled.BlockSteps);
+        Assert.Throws<ArgumentNullException>(() => pooled.Add(null!));
+    }
+
     /// <summary>||PA - LU||_F / ||A||_F, rebuilding PA from the packed factors.</summary>
     private static double FactorizationResidual(LuFactorization lu, TestMatrix factors, TestMatrix original)
     {

@@ -56,12 +56,13 @@ internal static unsafe class KernelEntry
     }
 
     /// <summary>Factor <paramref name="a"/> in place as P*A = L*U. The result holds no pointer.</summary>
-    public static LuFactorization FactorLu<TKernel>(GemmDispatch dispatch, Target a, int blockSize)
+    public static LuFactorization FactorLu<TKernel>(
+        GemmDispatch dispatch, Target a, int blockSize, LuPhaseTimings? timings = null)
         where TKernel : struct, IMicroKernel
     {
         fixed (double* pa = a.Data)
         {
-            return Lu.Factor<TKernel>(a.Rows, a.Columns, pa, a.Stride, dispatch, blockSize);
+            return Lu.Factor<TKernel>(a.Rows, a.Columns, pa, a.Stride, dispatch, blockSize, timings);
         }
     }
 

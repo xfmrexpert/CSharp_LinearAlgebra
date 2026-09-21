@@ -159,7 +159,17 @@ public sealed class Workspace : IDisposable
     /// <param name="a">The square or rectangular matrix to factor. Overwritten.</param>
     /// <param name="blockSize">Panel width; zero selects the default. The optimum shifts with size.</param>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    public LuDecomposition FactorLu(Matrix<double> a, int blockSize = 0)
+    public LuDecomposition FactorLu(Matrix<double> a, int blockSize = 0) =>
+        FactorLu(a, blockSize, timings: null);
+
+    /// <summary>
+    /// The same factorization with per-phase timing collected into
+    /// <paramref name="timings"/>. Internal because it exists for the
+    /// diagnostics tool and the tests: the phase split is a measurement input,
+    /// not part of the library's contract, and a null collector is exactly the
+    /// shipped path.
+    /// </summary>
+    internal LuDecomposition FactorLu(Matrix<double> a, int blockSize, LuPhaseTimings? timings)
     {
         ArgumentNullException.ThrowIfNull(a);
 
@@ -177,9 +187,9 @@ public sealed class Workspace : IDisposable
 
             factorization = _kernel switch
             {
-                Kernel.Avx512 => KernelEntry.FactorLu<Avx512Kernel16x8>(dispatch, target, nb),
-                Kernel.Avx2 => KernelEntry.FactorLu<Avx2Kernel8x6>(dispatch, target, nb),
-                _ => KernelEntry.FactorLu<ScalarKernel4x4>(dispatch, target, nb),
+                Kernel.Avx512 => KernelEntry.FactorLu<Avx512Kernel16x8>(dispatch, target, nb, timings),
+                Kernel.Avx2 => KernelEntry.FactorLu<Avx2Kernel8x6>(dispatch, target, nb, timings),
+                _ => KernelEntry.FactorLu<ScalarKernel4x4>(dispatch, target, nb, timings),
             };
         }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
 using Tensile;
@@ -20,10 +21,13 @@ namespace Tensile.Diagnostics;
 ///    the dump ran through <c>dotnet run</c>.
 /// 2. It prints what the host actually supports and what BLIS dispatched to,
 ///    without which no measured ratio means anything.
-/// 3. It reports estimator accuracy by ensemble. Those numbers are diagnostic
-///    rather than assertable: normest1 is a lower bound, so 38% exact on
-///    uniform signed matrices is the ensemble's difficulty and not a defect,
-///    and the useful output is the distribution rather than a pass or a fail.
+/// 3. It reports estimator accuracy by ensemble, and where a blocked LU
+///    spends its time. Those numbers are diagnostic rather than assertable:
+///    normest1 is a lower bound, so 38% exact on uniform signed matrices is the
+///    ensemble's difficulty and not a defect, and the useful output is the
+///    distribution rather than a pass or a fail. The LU phase split is the same
+///    kind of thing, and it is here rather than in the benchmarks because
+///    BenchmarkDotNet measures a whole call and cannot see inside one.
 /// </summary>
 public static class Program
 {
@@ -47,6 +51,7 @@ public static class Program
         if (!quiet)
         {
             ReportBlis();
+            ReportLuPhases();
             ReportEstimatorAccuracy();
         }
 
@@ -163,6 +168,116 @@ public static class Program
         }
 
         Console.WriteLine();
+    }
+
+    /// <summary>
+    /// Where a blocked LU spends its time, by phase.
+    ///
+    /// This is here because it is the input to an argument rather than a
+    /// number in its own right: LU runs at 45% of threaded GEMM, and whether
+    /// that is Amdahl or a defect depends entirely on how much of the work is
+    /// in the three serial phases (panel, swaps, triangular solve) against the
+    /// one threaded phase (the trailing GEMM). CLAUDE.md's reconciliation
+    /// rests on this split, so it must be measured on the machine in question
+    /// and at the thread count in question, not quoted from elsewhere.
+    ///
+    /// Read it with the environment in mind. Pinned to one core it reports the
+    /// serial split; unpinned it reports the threaded one, and the GEMM share
+    /// falls because that is the only phase that gets faster. Both are worth
+    /// having and they are different measurements.
+    ///
+    /// The last column is the honest one: <see cref="LuPhaseTimings.Unattributed"/>
+    /// is loop time the four phases do not claim, and it is printed rather than
+    /// normalised away.
+    /// </summary>
+    private static void ReportLuPhases()
+    {
+        const int Repetitions = 7;
+
+        Console.WriteLine("=== LU phase breakdown ===");
+        Console.WriteLine($"  workspace     : {Workspace.Shared.KernelName}, {Environment.ProcessorCount} logical core(s) visible");
+        Console.WriteLine("  n     nb    GFLOP/s   panel   swaps    trsm    gemm  unattr    instrument");
+
+        foreach (int n in new[] { 512, 1024, 2048 })
+        {
+            int nb = Lu.DefaultBlockSizeFor(n, n);
+
+            var a = new Matrix<double>(n, n);
+
+            // Warm up: the first factorization at a size pays for tiering and
+            // for first-touch of the packing buffers, neither of which belongs
+            // in a phase split.
+            Fill(a, seed: n);
+            _ = Workspace.Shared.FactorLu(a, nb, timings: null);
+
+            var pooled = new LuPhaseTimings();
+            var timedWall = new long[Repetitions];
+            var untimedWall = new long[Repetitions];
+
+            // Timed and untimed alternate, and the comparison is between
+            // medians, because the interesting quantity is a fraction of a
+            // percent and a block-of-one-then-block-of-the-other schedule
+            // would charge the whole thermal gradient to the instrument.
+            for (int rep = 0; rep < Repetitions; rep++)
+            {
+                var timings = new LuPhaseTimings();
+
+                Fill(a, seed: n + rep);
+                long start = Stopwatch.GetTimestamp();
+                _ = Workspace.Shared.FactorLu(a, nb, timings);
+                timedWall[rep] = Stopwatch.GetTimestamp() - start;
+
+                pooled.Add(timings);
+
+                Fill(a, seed: n + rep);
+                start = Stopwatch.GetTimestamp();
+                _ = Workspace.Shared.FactorLu(a, nb, timings: null);
+                untimedWall[rep] = Stopwatch.GetTimestamp() - start;
+            }
+
+            double seconds = (double)pooled.Total / Stopwatch.Frequency;
+            double flops = ((2.0 / 3.0) * n - 0.5) * n * n - n / 6.0;
+            double gflops = seconds == 0.0 ? 0.0 : Repetitions * flops / seconds / 1e9;
+
+            double timed = Median(timedWall);
+            double untimed = Median(untimedWall);
+            double instrument = untimed == 0.0 ? 0.0 : 100.0 * (timed - untimed) / untimed;
+
+            Console.WriteLine(
+                $"  {n,-5} {nb,-4} {gflops,8:F2}  {pooled.Share(pooled.Panel),5:F1}%  "
+                + $"{pooled.Share(pooled.Swaps),5:F1}%  {pooled.Share(pooled.Triangular),5:F1}%  "
+                + $"{pooled.Share(pooled.Gemm),5:F1}%  {pooled.Share(pooled.Unattributed),5:F1}%  "
+                + $"{instrument,8:+0.00;-0.00;0.00}%");
+        }
+
+        Console.WriteLine("  note          : pinned gives the serial split, unpinned the threaded one.");
+        Console.WriteLine("                  The instrument column is the cost of collecting, and is");
+        Console.WriteLine("                  noise rather than overhead if it straddles zero.");
+        Console.WriteLine();
+
+        static double Median(long[] samples)
+        {
+            long[] sorted = (long[])samples.Clone();
+            Array.Sort(sorted);
+
+            return sorted.Length % 2 == 1
+                ? sorted[sorted.Length / 2]
+                : 0.5 * (sorted[sorted.Length / 2 - 1] + sorted[sorted.Length / 2]);
+        }
+
+        static void Fill(Matrix<double> a, int seed)
+        {
+            var rng = new Random(seed);
+            int n = a.Rows;
+
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    a[i, j] = rng.NextDouble() - 0.5;
+
+            // Diagonally dominant, so the factorization is well conditioned and
+            // the pivot search does not become the story.
+            for (int i = 0; i < n; i++) a[i, i] += n;
+        }
     }
 
     /// <summary>

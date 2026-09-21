@@ -91,9 +91,9 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 905 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 914 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep |
-| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
+| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
 
@@ -414,8 +414,34 @@ large factor to reach 70% — but the second decimal place is not.
 
 Phase breakdown at n=2048, nb=64 — GEMM 65%, panel 14%, swaps 10%, TRSM 11% —
 is from the old single-core container run and has NOT been re-taken threaded.
-Re-taking it is now the highest-value LU measurement, because it is the input
-to the Amdahl argument above.
+Re-taking it is the highest-value LU measurement outstanding, because it is the
+input to the Amdahl argument above.
+
+**The instrument for re-taking it now exists**: `Lu.Factor` takes an optional
+`LuPhaseTimings`, and `tensile-diag` prints the split at n=512/1024/2048 in its
+default (non-`--quiet`) run. Two things to know before quoting a number from it.
+
+First, *the environment chooses which measurement you get*: pinned
+(`taskset -c 0`) gives the serial split, unpinned the threaded one, and they
+answer different questions. The Amdahl argument wants the threaded one at the
+thread count LU actually runs at; the serial one is what the 65/14/10/11 row
+above is, and re-taking that too would let the two be compared directly.
+
+Second, the report carries its own control. The collector is opt-in, so the
+tool factors each size both ways — alternating, comparing medians, because the
+quantity at stake is a fraction of a percent and running one block then the
+other would charge the whole thermal gradient to the instrument. The
+`instrument` column is that difference. On the 4-core development container it
+reads -2.2% to +7.9% at n=512 and within +-2% above, i.e. noise straddling
+zero, while the shares themselves reproduce to a few tenths of a percent
+between runs. If that column ever reads consistently positive, the split is
+measuring the instrument and not the factorization.
+
+An `unattr` column reports loop time the four phases do not claim (the pivot
+fix-up, the diagonal scan, loop overhead). It is deliberately printed rather
+than normalised away: it read 0.5-0.6% at n=512 and 0.0% above on the
+development container, and a split that silently summed to 100% could hide a
+phase going unaccounted.
 
 Residuals: `||PA-LU||_F / ||A||_F` worst 1.80e-15, `||Ax-b||_inf /
 (||A||_inf ||x||_inf)` worst 3.63e-16, across 11 shapes (square, tall, wide,
@@ -628,7 +654,10 @@ well- and ill-conditioned inputs.
 - **The LU phase breakdown is single-core and from the old container.** It is
   now load-bearing — the Amdahl argument that explains LU's 46% of threaded
   GEMM rests on the 65/14/10/11 split — so re-taking it threaded on this
-  machine is the highest-value LU measurement outstanding.
+  machine is the highest-value LU measurement outstanding. The instrumentation
+  for it has landed (`LuPhaseTimings`, reported by `tensile-diag`); what is
+  missing is a run on the 12700H, pinned and unpinned, which is two invocations
+  and no rebuild. See "LU" above for how to read the report.
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
   LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
   which is strong evidence but not the same thing.
@@ -733,8 +762,14 @@ Four layers, deliberately overlapping:
   `Packing`, `Blas1`, `Blas2` and `Triangular` are exactly where an off-by-one
   hides.
 - **`tensile-diag`** covers what unit tests cannot: which kernels this host
-  actually has, what BLIS dispatched to, and estimator accuracy by ensemble —
-  numbers worth reporting rather than asserting.
+  actually has, what BLIS dispatched to, estimator accuracy by ensemble, and
+  where a blocked LU spends its time — numbers worth reporting rather than
+  asserting. The LU split is there rather than in the benchmarks because
+  BenchmarkDotNet measures a whole call and cannot see inside one; what the
+  test suite pins about it is structural (the phases sum to no more than the
+  loop they were charged out of, the step count matches the block size, and
+  collecting the timings leaves the factorization bit-identical), never a
+  duration.
 - **`disasm.sh`** is the codegen gate, and the one CI job no test can replace:
   correctness is unaffected by a spill, only speed is.
 - **The fuzz harness** (`tests/Tensile.Fuzz`) finds the argument *pairs* the

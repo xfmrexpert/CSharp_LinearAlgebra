@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tensile.Kernels;
@@ -66,6 +67,103 @@ internal sealed class LuFactorization
 }
 
 /// <summary>
+/// Where a blocked factorization spends its time, by phase.
+///
+/// This exists because the split is load-bearing: the argument that LU's 45%
+/// of threaded GEMM is Amdahl rather than a defect rests on how much of the
+/// work is in the serial phases, and the figures it rested on were measured
+/// single-core on a different machine. See CLAUDE.md, "LU".
+///
+/// Collection is opt-in and costs nothing when it is off. <see cref="Lu.Factor"/>
+/// takes one of these or null; null means a handful of perfectly predictable
+/// null checks per block step, which at n=2048 and nb=64 is 32 steps against
+/// 88 ms of work. When it is on, the cost is one
+/// <see cref="Stopwatch.GetTimestamp"/> per phase per block step — about 160
+/// calls for that same factorization, a few microseconds, well under 0.01%.
+/// tensile-diag reports that cost rather than asserting it: it factors each
+/// size both ways and prints the difference.
+///
+/// <see cref="Total"/> is measured around the whole loop rather than summed
+/// from the phases, so the difference between it and their sum is time the
+/// phases do not account for — the pivot fix-up, the diagonal scan, loop
+/// overhead. Reporting that residue is the point: a split that silently
+/// normalised to 100% could hide it.
+/// </summary>
+internal sealed class LuPhaseTimings
+{
+    private long _panel;
+    private long _swaps;
+    private long _triangular;
+    private long _gemm;
+
+    /// <summary>Ticks in the unblocked panel factorization.</summary>
+    public long Panel => _panel;
+
+    /// <summary>Ticks applying row interchanges either side of the panel.</summary>
+    public long Swaps => _swaps;
+
+    /// <summary>Ticks in the triangular solve for U12.</summary>
+    public long Triangular => _triangular;
+
+    /// <summary>Ticks in the trailing-submatrix GEMM.</summary>
+    public long Gemm => _gemm;
+
+    /// <summary>Ticks for the whole blocked loop, phases and everything between.</summary>
+    public long Total { get; private set; }
+
+    /// <summary>Block steps taken.</summary>
+    public int BlockSteps { get; private set; }
+
+    /// <summary>Ticks the phases above do not account for.</summary>
+    public long Unattributed => Math.Max(0, Total - (Panel + Swaps + Triangular + Gemm));
+
+    /// <summary>A phase's share of the total, as a percentage.</summary>
+    /// <param name="ticks">One of the phase totals.</param>
+    public double Share(long ticks) => Total == 0 ? 0.0 : 100.0 * ticks / Total;
+
+    /// <summary>Add another factorization's timings to these, for pooling over repetitions.</summary>
+    /// <param name="other">The run to fold in.</param>
+    public void Add(LuPhaseTimings other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        _panel += other._panel;
+        _swaps += other._swaps;
+        _triangular += other._triangular;
+        _gemm += other._gemm;
+        Total += other.Total;
+        BlockSteps += other.BlockSteps;
+    }
+
+    /// <summary>A timestamp, or zero when <paramref name="timings"/> is null.</summary>
+    /// <param name="timings">The collector, or null when collection is off.</param>
+    public static long Now(LuPhaseTimings? timings) => timings is null ? 0L : Stopwatch.GetTimestamp();
+
+    internal void AddPanel(ref long mark) => Accumulate(ref _panel, ref mark);
+    internal void AddSwaps(ref long mark) => Accumulate(ref _swaps, ref mark);
+    internal void AddTriangular(ref long mark) => Accumulate(ref _triangular, ref mark);
+    internal void AddGemm(ref long mark) => Accumulate(ref _gemm, ref mark);
+
+    internal void AddStep() => BlockSteps++;
+
+    internal void AddTotal(long start) => Total += Stopwatch.GetTimestamp() - start;
+
+    /// <summary>
+    /// Charge the time since <paramref name="mark"/> to a bucket and re-mark.
+    /// The bucket is taken by reference rather than through a delegate so that
+    /// the enabled path allocates nothing at all: a closure here would be a
+    /// delegate per phase per block step, which is exactly the sort of cost a
+    /// measurement instrument must not add to what it measures.
+    /// </summary>
+    private static void Accumulate(ref long bucket, ref long mark)
+    {
+        long now = Stopwatch.GetTimestamp();
+        bucket += now - mark;
+        mark = now;
+    }
+}
+
+/// <summary>
 /// LU factorization with partial pivoting, right-looking and blocked so that
 /// the trailing-submatrix update is a GEMM.
 ///
@@ -130,7 +228,8 @@ internal static unsafe class Lu
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static LuFactorization Factor<TKernel>(
-        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = 0)
+        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = 0,
+        LuPhaseTimings? timings = null)
         where TKernel : struct, IMicroKernel
     {
         var result = new LuFactorization(m, n);
@@ -149,10 +248,15 @@ internal static unsafe class Lu
             return result;
         }
 
+        long loopStart = LuPhaseTimings.Now(timings);
+
         for (int jb = 0; jb < limit; jb += blockSize)
         {
             int width = Math.Min(blockSize, limit - jb);
             double* panel = a + (nint)jb * lda + jb;
+            long mark = LuPhaseTimings.Now(timings);
+
+            timings?.AddStep();
 
             // Factor the current panel: rows jb..m-1, columns jb..jb+width-1.
             FactorPanel(m - jb, width, panel, lda, pivots.AsSpan(jb, width), jb, result);
@@ -160,18 +264,28 @@ internal static unsafe class Lu
             // Panel pivots are relative to the panel top; make them global.
             for (int i = 0; i < width; i++) pivots[jb + i] += jb;
 
+            if (timings is not null) timings.AddPanel(ref mark);
+
             // Apply this panel's interchanges to the columns either side of it.
             SwapRows(a, lda, 0, jb, pivots, jb, jb + width);
 
-            if (jb + width >= n) continue;
+            if (jb + width >= n)
+            {
+                if (timings is not null) timings.AddSwaps(ref mark);
+                continue;
+            }
 
             SwapRows(a, lda, jb + width, n, pivots, jb, jb + width);
+
+            if (timings is not null) timings.AddSwaps(ref mark);
 
             // U12 := L11^-1 * A12.
             Triangular.SolveLowerUnit(
                 width, n - jb - width,
                 a + (nint)jb * lda + jb, lda,
                 a + (nint)(jb + width) * lda + jb, lda);
+
+            if (timings is not null) timings.AddTriangular(ref mark);
 
             if (jb + width >= m) continue;
 
@@ -184,7 +298,11 @@ internal static unsafe class Lu
                 -1.0, a + (nint)jb * lda + (jb + width), lda,
                 a + (nint)(jb + width) * lda + jb, lda,
                 1.0, a + (nint)(jb + width) * lda + (jb + width), lda);
+
+            if (timings is not null) timings.AddGemm(ref mark);
         }
+
+        timings?.AddTotal(loopStart);
 
         RecordPivotRange(result, a, lda);
         return result;

@@ -76,7 +76,8 @@ internal abstract unsafe class KernelDriver
         int m, int n, int k,
         double alpha, double* a, int lda, double* b, int ldb, double beta, double* c, int ldc);
 
-    public abstract LuFactorization FactorLu(int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize);
+    public abstract LuFactorization FactorLu(
+        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize, LuPhaseTimings? timings = null);
 
     /// <summary>Serial packing buffers with caller-chosen cache-blocking parameters.</summary>
     public abstract GemmScratch Scratch(int mc, int kc, int nc);
@@ -125,8 +126,9 @@ internal abstract unsafe class KernelDriver
             ParallelGemm.Multiply<TKernel>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, scratch);
         }
 
-        public override LuFactorization FactorLu(int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize) =>
-            Lu.Factor<TKernel>(m, n, a, lda, gemm, blockSize);
+        public override LuFactorization FactorLu(
+            int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize, LuPhaseTimings? timings = null) =>
+            Lu.Factor<TKernel>(m, n, a, lda, gemm, blockSize, timings);
 
         public override GemmScratch Scratch(int mc, int kc, int nc) =>
             GemmScratch.For<TKernel>(mc, kc, nc);

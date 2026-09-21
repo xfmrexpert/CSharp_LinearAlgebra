@@ -92,7 +92,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
 | `tests/Tensile.Tests/` | xunit.v3, 914 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
-| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep |
+| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
@@ -209,29 +209,33 @@ whole packed B panel again. MC=144 was derived for a Gracemont E-core's quarter
 share of its cluster's 2 MiB L2, which is the right target for the threaded
 path and quite possibly the wrong one for a pinned P-core.
 
-**But this directly contradicts the block-size sweep**, which A/B'd exactly
-these two values, pinned, in both directions, and put MC=144 ahead by 9.6% and
-9.5% at n=2048. Both cannot be right about the shipped path, and the difference
-between them is not MC: the sweep drives `Gemm.Multiply` with an explicit
-scratch, while `GemmBenchmarks` goes through `GemmDispatch`, which is what
-every caller of the library takes. Those two have disagreed by 8-18% on
-identical configuration before, recorded below as unexplained. That gap has
-stopped being a curiosity and become the thing the MC decision rests on.
+**That explanation is now dead, and so is the alternative.** The block-size
+sweep had A/B'd exactly these two MC values, pinned, in both directions, and
+put MC=144 ahead by 9.5% at n=2048 — the opposite sign. The two runs differ in
+which path they drive, the sweep the raw driver and this one the dispatch, and
+those two had a long-standing unexplained 8-18% disagreement, so the dispatch
+looked like the culprit. `BlockSizeBenchmarks` was extended to measure both
+arms at each MC in one class, and it says otherwise:
 
-**MC=144 is not being reverted on this evidence**, because the evidence is a
-between-sitting ratio shift confounded with a job-configuration change, against
-a within-run A/B replicated in both directions. What has changed is that
-`BlockSizeBenchmarks` now measures both arms — the driver and the dispatch — at
-each MC, in one class and one sitting. If they agree there, the 8-18% was drift
-between processes and the sweep's verdict stands. If the dispatch is really
-slower, that is a defect in the path everyone uses and the block size chosen on
-the driver was never the right one to ship. Run it pinned, both directions,
-as root:
+- **the dispatch costs nothing** — six driver/dispatch pairs at ratios 1.003,
+  0.966, 1.021, 0.985, 0.986, 0.991, sign flipping, every one inside its own
+  row's StdDev;
+- **MC is a wash at n=2048** in the same sitting — +1.3% for MC=144 on the
+  driver and -1.7% on the dispatch, against 5-6.5% StdDev.
 
-```
-sudo taskset -c 0 dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*BlockSize*'
-sudo TENSILE_BENCH_REVERSE=1 taskset -c 0 dotnet run -c Release --project bench/Tensile.Benchmarks -- --filter '*BlockSize*'
-```
+So neither the path nor the block size accounts for 10-12 points of ratio. What
+remains is that `GemmBenchmarks` and `BlisGemmBenchmarks` were *separate
+classes*, which BenchmarkDotNet runs as separate processes minutes apart, and
+this machine moves ~20% between processes. **The ratio in the table above is
+a cross-process ratio and is not trustworthy to better than about ten points.**
+That is finding 12, and the fix is structural: the Tensile and BLIS rows now
+live in one class (`GemmVsBlisBenchmarks`), interleaved by BDN over the same
+operands, so the next parity figure is a within-process ratio.
+
+The qualitative shape has replicated across three campaigns and survives all
+of this — behind at n=128, level from n=256 up — but the decimal places in the
+headline table were never as solid as they read, and the table needs re-taking
+with the merged class before any of them is quoted again.
 
 Note BLIS has no Alder Lake sub-configuration and falls back to its `haswell`
 config, whose double micro-kernel is 6x8 AVX2 assembly — the same geometry and
@@ -271,23 +275,61 @@ size". Two of those three numbers were the machine warming up. This is the
 first time the reverse-order test of finding 7 has actually been run, and it
 overturned two results out of three.
 
-One thing this sweep did NOT explain, and it has since become load-bearing:
-`BlockSizeBenchmarks` at MC=288/KC=384 is the same configuration as
-`GemmBenchmarks`'s serial row, yet ran 8-18% slower in every attempt,
-including the clean high-priority one. Not tiering — `Gemm.Multiply`,
-`ParallelGemm.Multiply` and both `GemmDispatch` entry points all carry
-`AggressiveOptimization`, so that was checked and ruled out. It was written off
-as the single-core GEMM table having been taken on the coldest machine of the
-session.
+### Re-run 2026-09-21, both arms in one class: the driver/dispatch gap is not real
 
-That write-off is no longer safe. The two classes are not in fact bit-for-bit
-the same call: this one drives `Gemm.Multiply` with an explicit scratch, and
-`GemmBenchmarks` goes through `GemmDispatch`. When the pinned re-run above
-disagreed with this sweep about MC, the disagreement ran exactly along that
-seam. `BlockSizeBenchmarks` now measures both arms at each MC in one class, so
-the next run of it answers whether the gap is a real cost in the dispatch or
-drift between two processes. Until it does, absolute GFLOP/s are not comparable
-across benchmark classes and neither, it turns out, are block-size verdicts.
+`BlockSizeBenchmarks` had an unexplained quarrel with `GemmBenchmarks`: the
+same MC=288/KC=384 configuration ran 8-18% slower there, in every attempt,
+including the clean high-priority one. Tiering was ruled out. It was written
+off as thermal, and then the MC question came to rest on it, because the sweep
+drives `Gemm.Multiply` with an explicit scratch while `GemmBenchmarks` goes
+through `GemmDispatch`.
+
+The class now runs both arms at each MC, in one process. KC is fixed at 384,
+since 256 was within 1% of it everywhere in both directions. Pinned, ascending,
+BDN's default job; StdDev 2.1-6.5%.
+
+| MC | n | driver | dispatch | dispatch/driver |
+| --- | --- | --- | --- | --- |
+| 144 | 128 | 39.72 | 39.61 | 1.003 |
+| 144 | 512 | 44.89 | 46.47 | 0.966 |
+| 144 | 2048 | 45.43 | 44.48 | 1.021 |
+| 288 | 128 | 39.24 | 39.83 | 0.985 |
+| 288 | 512 | 42.81 | 43.43 | 0.986 |
+| 288 | 2048 | 44.84 | 45.23 | 0.991 |
+
+**The dispatch costs nothing.** Six pairs, ratios 0.966 to 1.021, sign
+flipping, every one inside its own row's StdDev. The 8-18% gap was drift
+between two processes, not a cost in the path every caller takes — which is
+what `ApiOverheadBenchmarks` had already implied and what the arithmetic says
+(O(1) checks against O(n^3) of work). Corroborating it from the other side,
+this class's dispatch row at MC=144/n=2048 reads 44.48 against
+`GemmBenchmarks`'s 45.49 in the pinned sitting — two classes, two sittings,
+2.2% apart, where 09-19 had them 8-18% apart.
+
+**And the MC verdict does not reproduce.** MC=144 against MC=288, positive
+meaning MC=144 faster:
+
+| n | driver, mean | driver, median | dispatch, mean | dispatch, median | 09-19 ascending |
+| --- | --- | --- | --- | --- | --- |
+| 128 | +1.2% | +1.6% | -0.6% | -0.4% | +13.8% |
+| 512 | +4.9% | +7.0% | **+7.0%** | **+8.1%** | +12.3% |
+| 2048 | +1.3% | +0.5% | -1.7% | -1.5% | +9.6% |
+
+**The n=2048 result that survived reversal at 9.5% is now a wash**, at a size
+where StdDev is 5-6.5%. n=512 is the only size with a real signal this time,
+4.9-8.1% depending on arm and statistic — and n=512 is precisely the size
+whose 09-19 result flipped sign under reversal, and this is an ascending run,
+in which BDN puts MC=144 first and coolest. It means nothing without the
+descending run.
+
+Note also that MC=288 at n=2048 reads 44.84 here against `GemmBenchmarks`'s
+57.22 on 09-19 — the identical configuration, 21.6% down. The sitting moved
+again, by far more than the effect being measured.
+
+So: **MC is unsettled, the descending run is the next thing to take**, and both
+directions should carry `--iterationCount 31` and run as root, because every
+candidate effect left is in single-digit percent and BDN's default job does not
+resolve that on this machine.
 
 ## What the secure-by-design migration cost: nothing measurable
 
@@ -666,6 +708,29 @@ well- and ill-conditioned inputs.
     generous time bound. The general lesson: validity and cost are different
     questions, and an input that is valid can still be a denial of service.
 
+12. **A ratio computed across two benchmark classes is a ratio across two
+    processes.** BenchmarkDotNet runs each class in its own generated process,
+    minutes apart, and on this 12700H the same binary configuration has read
+    up to 22% differently between two sittings and 8-18% differently between
+    two processes in one sitting. Two conclusions were drawn from cross-class
+    ratios and both were wrong: an 8-18% cost in `GemmDispatch` that vanished
+    to 0.966-1.021 when both arms ran in one class, and a 10-12 point drop in
+    the parity ratio against BLIS blamed on MC=144, which a within-class A/B
+    then measured as +1.3%/-1.7% at that size. Neither effect existed.
+
+    The rule: **a ratio is only as good as the interleaving behind it.** If two
+    rows are to be divided, BDN must have run them back to back over the same
+    operands, which means putting them in the same class. That is why the
+    Tensile and BLIS rows now live together in `GemmVsBlisBenchmarks` rather
+    than in two classes compared by hand, and why `BlockSizeBenchmarks` carries
+    its dispatch arm.
+
+    The tell that a cross-class comparison has gone wrong is an unchanged
+    control moving: BLIS is an unchanged binary, and any run where it reads
+    10-20% off its previous figure is a run whose absolute numbers are not
+    comparable with anything from another sitting. Check the control before
+    reading the experiment.
+
 ---
 
 # Design decisions and why
@@ -701,17 +766,18 @@ well- and ill-conditioned inputs.
 
 # Open items
 
-- **`Gemm.cs`'s serial MC is unsettled again.** It was closed: swept in both
-  directions, MC=144 a real 9.5% win at n=2048, shipped as the serial default.
-  Then the pinned GEMM re-run with MC=144 in place lost 10-12 points of ratio
-  against BLIS at n>=1024, which is the opposite sign. The two measurements
-  differ in which path they drive — the sweep the driver, the re-run the
-  dispatch — so the open question is really the 8-18% driver/dispatch gap, and
-  `BlockSizeBenchmarks` now measures both arms at each MC in one class to
-  settle it. MC=144 stays shipped meanwhile; a between-sitting ratio shift does
-  not outweigh a bidirectional within-run A/B. KC is settled at 384 (256 within
-  1% everywhere, both directions) and is no longer swept. NC=4096 has still
-  never been varied, and MC has been measured at only three sizes.
+- **`Gemm.cs`'s serial MC is unsettled.** It was closed on a bidirectional
+  sweep that put MC=144 ahead by 9.5% at n=2048. The 2026-09-21 re-run of that
+  same sweep, in one class and with both arms, **does not reproduce it**: n=2048
+  reads +1.3% / -1.7% depending on arm, a wash against 5-6.5% StdDev. The only
+  signal left is n=512 at +4.9% to +8.1% — and that is the size whose 09-19
+  result flipped sign under reversal, in an ascending run where MC=144 goes
+  first and coolest. **The descending run is the next thing to take**, with
+  `--iterationCount 31` and as root. MC=144 stays shipped meanwhile; nothing
+  measured is against it, there is simply no longer a measurement for it
+  either. KC is settled at 384 (256 within 1% everywhere, both directions) and
+  is no longer swept. NC=4096 has still never been varied, and MC has been
+  measured at only three sizes.
 - ~~**Small-n threading.**~~ *Mostly closed.* The dispatch now keeps
   everything below 2^24 of work on the serial path, which is measured correct
   at every size tested from n=64 to n=192 (serial ahead 7-17%). n=128 in
@@ -736,11 +802,12 @@ well- and ill-conditioned inputs.
   size-dependent — 32 below order 1024, 64 at or above — where the flat nb=64
   had been costing 11-13% on smaller factorizations. What is still unmeasured
   is the crossover's exact location, which lies somewhere in (512, 1024].
-- **The 8-18% gap between driving the GEMM driver and driving the dispatch is
-  unexplained**, and the serial MC decision now rests on it. Tiering is ruled
-  out. `BlockSizeBenchmarks` carries both arms as of this commit; one pinned
-  bidirectional run of it either dissolves the gap into inter-process drift or
-  finds a real per-call cost in the path every caller takes.
+- ~~**The 8-18% gap between driving the GEMM driver and driving the dispatch is
+  unexplained.**~~ *Closed: it was never there.* Measured with both arms in one
+  class at each MC — six pairs, dispatch/driver 0.966 to 1.021, sign flipping,
+  every one inside its own StdDev. It was drift between two processes. See
+  finding 12, which is the general form and cost two conclusions before it was
+  understood.
 - ~~**The thread sweep's tail needs a descending run.**~~ *Closed.* Run both
   ways and averaged: peak at 6 threads (n=2048) and 8 (n=512), identical in
   both directions; decline past the peak is 12%, not the 17-19% the ascending
@@ -894,7 +961,17 @@ Guidance that has already been paid for once:
 Non-negotiable, because several early conclusions were artifacts:
 
 - Medians and IQR over 31 samples, never best-of-N. GFLOP/s from median
-  latency.
+  latency. **Pass `--iterationCount 31` explicitly** — nothing in the config
+  sets it, so a run that does not say so on the command line gets BDN's
+  `DefaultJob`, which does not resolve single-digit-percent effects on this
+  machine. The report header says which you got.
+- **Never divide two numbers from two benchmark classes.** Separate classes are
+  separate processes run minutes apart, and this machine drifts 8-22% between
+  them; two conclusions have already been destroyed that way. Rows that will be
+  divided go in one class so BDN interleaves them. See finding 12.
+- **Read the control first.** BLIS is an unchanged binary: if it reads 10-20%
+  off its previous figure, nothing in that run is comparable with anything from
+  another sitting, and only within-run ratios mean anything.
 - `[MethodImpl(MethodImplOptions.AggressiveOptimization)]` on every hot path.
 - `taskset -c 0` for single-thread comparisons; unpinned for scaling.
 - Check the disassembly for spills after any kernel change: run `./disasm.sh`,

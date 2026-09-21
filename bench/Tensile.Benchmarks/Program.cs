@@ -30,9 +30,9 @@ public static class Program
             typeof(BlockSizeBenchmarks),
         };
 
-        if (BlisGemmBenchmarks.IsAvailable)
+        if (GemmVsBlisBenchmarks.IsAvailable)
         {
-            types.Add(typeof(BlisGemmBenchmarks));
+            types.Add(typeof(GemmVsBlisBenchmarks));
         }
         else
         {

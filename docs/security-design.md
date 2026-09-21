@@ -498,6 +498,17 @@ loop we thought was cold. Either is fixable without abandoning the design.
 
 ---
 
+**Measured, 2026-09-21, on the 12700H: the guardrail passes.** Three paths
+over one GEMM driver — native pointers, POH storage straight into the
+dispatch, and the shipped `Workspace.Multiply` over bound views — came out at
++7.2%, -6.7% and +0.5% relative to native at n=128, 512 and 2048. The sign
+flips, so that is noise about zero rather than a cost, and the shipped path
+executed last and hottest in every group, meaning the thermal gradient worked
+against the result rather than producing it. Bounds-checked views, validated
+shapes, pinned storage, the pinning seam and the workspace lock are free at
+these sizes, as the O(1)-against-O(n^3) argument predicted. Numbers and
+caveats in CLAUDE.md under "What the secure-by-design migration cost".
+
 ## 10. Migration order
 
 Each phase leaves the build green and the tests passing. Nothing is merged

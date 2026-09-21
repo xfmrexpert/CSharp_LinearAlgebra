@@ -149,12 +149,16 @@ secure-by-design work, and `ApiOverheadBenchmarks` is what measures that.
 
 **n=128 is the one place BLIS is clearly ahead** (85%), and it is also the
 size where the managed side is furthest from its own ceiling (79% against
-BLIS's 93%). The obvious suspect was the serial path's placeholder MC=288,
-KC=384, both larger than the entire 128x128 operand — **and the sweep below
-ruled it out.** At n=128 all four block-size combinations land within 1% of
-each other. Whatever costs the managed side 15% at n=128, it is not cache
-blocking. Per-call overhead that O(n^3) has not yet amortised is the next
-hypothesis, and `ApiOverheadBenchmarks` measures a related quantity.
+BLIS's 93%). **Two hypotheses for it have now been measured and both are
+dead.** Cache blocking: the sweep below finds all four MC/KC combinations
+within 1% of each other at n=128. Per-call overhead in the managed API
+layers: the API-overhead measurement finds the shipped path no slower than
+raw pointers at n=128 (in fact 7% faster, within noise).
+
+Both of those tested things *above* the GEMM driver. What remains untested is
+the driver itself at small n — packing setup and loop overhead that BLIS may
+amortise better, or a small-matrix special path on its side. That is where to
+look next, and nothing measured so far bears on it.
 
 Note this table was taken with the old MC=288; the serial default is now
 MC=144, so it needs a quick re-run to stay current.
@@ -207,6 +211,47 @@ on the coldest machine of the session. It does not affect the MC conclusion,
 which is a within-run comparison replicated in both directions, but it does
 mean absolute GFLOP/s are not comparable across benchmark classes in one
 sitting.
+
+## What the secure-by-design migration cost: nothing measurable
+
+The section 9 guardrail of `docs/security-design.md`, and the last number the
+security work was resting on. Three rows over the same GEMM driver, differing
+only in what sits above it: native aligned memory straight into the dispatch;
+a `Matrix<double>` on the pinned object heap, still straight into the
+dispatch; and the shipped path — `Workspace.Multiply` over bound views, which
+adds `Bind`, the `Operand` length checks, the workspace lock and the pinning
+seam. Unpinned, root, 31 iterations, GFLOP/s from medians.
+
+| n | native pointers | POH storage, direct | public API | StdDev range |
+| --- | --- | --- | --- | --- |
+| 128 | 43.31 | 45.39 (+4.8%) | 46.41 (**+7.2%**) | 8.3-9.5% |
+| 512 | 140.44 | 129.55 (-7.8%) | 131.06 (**-6.7%**) | 2.0-6.2% |
+| 2048 | 136.81 | 137.75 (+0.7%) | 137.47 (**+0.5%**) | 1.8-3.1% |
+
+**The sign flips across sizes — +7.2%, -6.7%, +0.5% — which is noise around
+zero, not a cost.** At n=512, the one size where the API looks slower, the
+7% gap is 1.1 standard deviations of the *native* row, which has the worst
+dispersion in that group (6.2%). At n=2048, where dispersion is tightest, the
+three paths agree to half a percent.
+
+Two things make this stronger than a bare tie. First, the execution order
+within each size is native, then POH, then API, so the shipped path runs last
+and hottest; the thermal gradient works against the conclusion rather than
+producing it. Second, the arithmetic was never in doubt — every check the
+migration added is O(1) per call against O(n^3) of work — so the measurement
+was confirming an expected zero rather than hunting for a small effect. A
+ratio that had *failed* to converge would have meant per-element work, which
+would be a defect.
+
+So: bounds-checked views, validated shapes, pinned-object-heap storage, a
+single pinning seam and a workspace lock, for no measurable throughput. That
+is the whole case for the secure-by-design rewrite, measured rather than
+asserted.
+
+One caveat of the usual kind: absolute figures here (136.8 GFLOP/s threaded
+at n=2048) sit ~7% below the thread sweep's 147.0 at the same thread count,
+which is the same cross-benchmark-class drift recorded elsewhere. The
+within-run comparison is what carries the result.
 
 ## Threading: power-limited, and the baseline is a trap
 
@@ -540,17 +585,11 @@ well- and ill-conditioned inputs.
   which is strong evidence but not the same thing.
 - **The estimator's `Blas2` products are O(n^2 t) with no blocking.** Fine at
   the sizes that matter for `dgecon`, possibly not for `expm`'s inner loop.
-- **What the secure-by-design migration cost is still unmeasured.** Every GEMM
-  benchmark but one allocates with `NativeMemory` and calls the dispatch
-  directly, which skips POH storage, `Bind`, the `Operand` checks, the
-  workspace lock and the pinning seam — i.e. everything the migration added.
-  `ApiOverheadBenchmarks` closes that hole with three rows (native pointers /
-  POH storage direct / public API) so the layers can be told apart. All of it
-  is O(1) per call against O(n^3) work, so the ratio should converge to 1 as N
-  grows and any real cost should show at N=128; a ratio that does not converge
-  would mean per-element work, which is a defect rather than a tax. This is the
-  section 9 guardrail of `docs/security-design.md`. *Not yet measured on the
-  12700H.*
+- ~~**What the secure-by-design migration cost is unmeasured.**~~ *Closed.*
+  Measured on the 12700H: nothing, at any size. +7.2%, -6.7%, +0.5% at
+  n=128/512/2048 — noise around zero, with the shipped path executing last and
+  hottest in every group. See "What the secure-by-design migration cost"
+  above. The section 9 guardrail is satisfied.
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small

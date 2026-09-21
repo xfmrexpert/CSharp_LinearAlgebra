@@ -188,7 +188,7 @@ public class HostileDimensionTests
     /// contrived attacker: it is the shape of every matrix-free operator, and
     /// the reason the estimator cannot trust Order alone.
     /// </summary>
-    private sealed class HostileOrderOperator(int order) : ILinearOperator
+    private sealed class HostileOrderOperator(int order) : ITransposableOperator
     {
         public int Order => order;
 

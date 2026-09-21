@@ -174,7 +174,7 @@ public sealed class AllocationLimitTests : IDisposable
         _ = new Matrix<double>(100, 100);
     }
 
-    private sealed class UntouchedOperator(int order) : ILinearOperator
+    private sealed class UntouchedOperator(int order) : ITransposableOperator
     {
         public bool Touched { get; private set; }
 

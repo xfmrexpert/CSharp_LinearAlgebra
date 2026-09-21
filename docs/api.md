@@ -250,22 +250,35 @@ rather than measured.
 
 `ILinearOperator` is the extension point for anything that can be applied but
 should not be formed: a matrix power, an inverse, and later the operators
-`expm` probes. It takes and returns bound views, so an implementation receives
-the extents along with the data and cannot be handed a buffer shorter than its
-`Order` claims.
+`expm` and `expmv` probe. It takes and returns bound views, so an
+implementation receives the extents along with the data and cannot be handed a
+buffer shorter than its `Order` claims.
 
 ```csharp
 public interface ILinearOperator
 {
     int Order { get; }
     void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);            // Y := A X
+}
+
+public interface ITransposableOperator : ILinearOperator
+{
     void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);   // Y := Aᵀ X
 }
 ```
 
-Two implementations ship. `DenseMatrixOperator(a, power)` applies `Aᵖ` by `p`
-successive panel products without forming the power; `LuInverseOperator(lu)`
-applies `A⁻¹` by solving. Both are what `NormEstimate` needs:
+The transpose is a **separate capability**, not part of the base contract. A
+matrix-free operator — an FEM or MTL operator assembled on the fly — can very
+often apply `A` and not cheaply apply `Aᵀ`, so requiring both would force every
+implementer to supply a transpose in order that one algorithm could have it.
+Implement `ILinearOperator` if you only ever apply forward;
+`ITransposableOperator` is what `NormEstimate` asks for, because Higham and
+Tisseur's estimator alternates products with `A` and `Aᵀ`.
+
+Two implementations ship, both transposable. `DenseMatrixOperator(a, power)`
+applies `Aᵖ` by `p` successive panel products without forming the power;
+`LuInverseOperator(lu)` applies `A⁻¹` by solving. Both are what `NormEstimate`
+needs:
 
 ```csharp
 double est   = NormEstimate.Of(new DenseMatrixOperator(a, power: 3)).Value;   // ≈ ‖A³‖₁

@@ -182,7 +182,7 @@ internal static unsafe class KernelEntry
         fixed (double* px = x.Data)
         fixed (double* py = y.Data)
         {
-            Blas2.Multiply(a.Rows, x.Columns, pa, a.Stride, px, x.Stride, py, y.Stride);
+            PanelProduct.Apply(a.Rows, x.Columns, pa, a.Stride, px, x.Stride, py, y.Stride);
         }
     }
 
@@ -196,7 +196,7 @@ internal static unsafe class KernelEntry
         fixed (double* px = x.Data)
         fixed (double* py = y.Data)
         {
-            Blas2.MultiplyTransposed(a.Rows, x.Columns, pa, a.Stride, px, x.Stride, py, y.Stride);
+            PanelProduct.ApplyTranspose(a.Rows, x.Columns, pa, a.Stride, px, x.Stride, py, y.Stride);
         }
     }
 

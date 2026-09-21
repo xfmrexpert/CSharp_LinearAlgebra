@@ -62,7 +62,7 @@ exists in full, as three assemblies:
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
 | Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate` |
-| Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, Blas1/2, exact norms, the `KernelEntry` seam |
+| Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
 The kernel assembly is reached only through `KernelEntry`, which takes
@@ -78,7 +78,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/MatrixShape.cs` | Self-validating shape value; all extent/offset arithmetic, checked in `long` |
 | `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`: `Span`-backed ref structs, obtained only by `Bind` or slicing; no pointer constructor |
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
-| `src/Tensile/LinearOperators.cs` | `ILinearOperator` over views (the public extension point), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
+| `src/Tensile/LinearOperators.cs` | `ILinearOperator` / `ITransposableOperator` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
@@ -88,7 +88,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/KernelEntry.cs` | The single seam where spans are pinned and become pointers; restates every shape precondition |
 | `src/Tensile.Kernels/Operand.cs` | `Operand` / `Target`: span + shape, length-checked on construction |
 | `src/Tensile.Kernels/Alignment.cs` | Cache-line offset for pinned arrays; the one address read on the allocation path |
-| `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
+| `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
 | `tests/Tensile.Tests/` | xunit.v3, 914 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
@@ -712,7 +712,8 @@ well- and ill-conditioned inputs.
    plenty of unrelated framework methods are also called `Execute`.
 
 10. **Code with no caller is not verified by anything.** `Lu.cs`,
-    `LuTest.cs`, `Blas1.cs` and `Triangular.cs` all arrived in one commit that
+    `LuTest.cs`, `Blas1.cs` (now `ColumnOps.cs`/`Pivoting.cs`) and `Triangular.cs`
+    all arrived in one commit that
     did not touch `Program.cs`, so `LuTest.Run` was unreachable and LU had
     never been exercised by this repository's entry point — while this file
     quoted its residuals as established. The residuals were real, but they came
@@ -786,6 +787,32 @@ well- and ill-conditioned inputs.
   so factorization completes — identical to `dgetrf`. `PivotRatio` is a cheap
   indicator, explicitly NOT a condition number.
 
+- **Kernel primitives are named for their role, not for a BLAS level.** BLAS
+  classifies by operand arity, which was a way to fit names into a flat Fortran
+  symbol table; the axis that actually determines the code here is **packed vs
+  streamed**. `Gemm` packs into micro-panels because O(n^3) of work amortises
+  it. `ColumnOps`, `Pivoting`, `PanelProduct`, `Triangular` and `Norms` stream
+  their operands in place because nothing they do would ever pay for packing.
+  So `Blas1` became `ColumnOps` (the shared vectorised column updates) plus
+  `Pivoting` (a *search*, whose contract is the index it returns, not a
+  residual), and `Blas2` became `PanelProduct.Apply`/`ApplyTranspose`, named
+  for `ILinearOperator.Apply` — its only consumer, through
+  `KernelEntry.MultiplyPanel`. The old name was wrong on BLAS's own terms
+  anyway: `Y := A*X` for an n x t panel is a matrix-matrix product that happens
+  to be computed a column at a time, not a level-2 operation.
+  `Blas1.MaxAbsStrided` was deleted in the same pass — it had no caller
+  anywhere, which is finding 10 exactly.
+
+- **The operator interfaces are split by capability.** `ILinearOperator`
+  requires `Apply` only; `ITransposableOperator` adds `ApplyTranspose`, and
+  that is what `NormEstimate` takes, because Higham and Tisseur's estimator
+  alternates products with A and A^T. Requiring both on one interface is the
+  same mistake as a `trans` flag on every BLAS signature: it makes every
+  implementer carry what one algorithm needs. A matrix-free FEM or MTL
+  operator — the actual target application — frequently applies A cheaply and
+  cannot apply A^T at all, and `expmv` never needs the transpose. Split before
+  `expmv` was written, while the interface was still cheap to change.
+
 ---
 
 # Open items
@@ -847,8 +874,9 @@ well- and ill-conditioned inputs.
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
   LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
   which is strong evidence but not the same thing.
-- **The estimator's `Blas2` products are O(n^2 t) with no blocking.** Fine at
-  the sizes that matter for `dgecon`, possibly not for `expm`'s inner loop.
+- **The estimator's `PanelProduct` applications are O(n^2 t) with no
+  blocking.** Fine at the sizes that matter for `dgecon`, possibly not for
+  `expm`'s inner loop.
 - ~~**What the secure-by-design migration cost is unmeasured.**~~ *Closed.*
   Measured on the 12700H: nothing, at any size. +7.2%, -6.7%, +0.5% at
   n=128/512/2048 — noise around zero, with the shipped path executing last and
@@ -945,8 +973,8 @@ Four layers, deliberately overlapping:
   contract generic over the micro-kernel runs once per kernel, via an abstract
   base class with one concrete subclass each; a kernel the host cannot run is
   reported *skipped*, never silently passed. Internals are visible to it because
-  `Packing`, `Blas1`, `Blas2` and `Triangular` are exactly where an off-by-one
-  hides.
+  `Packing`, `ColumnOps`, `Pivoting`, `PanelProduct` and `Triangular` are
+  exactly where an off-by-one hides.
 - **`tensile-diag`** covers what unit tests cannot: which kernels this host
   actually has, what BLIS dispatched to, estimator accuracy by ensemble, and
   where a blocked LU spends its time — numbers worth reporting rather than

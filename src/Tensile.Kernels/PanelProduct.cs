@@ -1,13 +1,17 @@
 namespace Tensile.Kernels;
 
 /// <summary>
-/// Products of a square matrix with a narrow panel of columns.
+/// Products of a square matrix with a narrow panel of columns: the streamed
+/// path behind <c>ILinearOperator.Apply</c>.
 ///
 /// These exist rather than routing through <see cref="Gemm"/> because the
 /// 1-norm estimator probes with t columns, where t is 2 or 4. Packing an
 /// n x n operand into micro-panels to multiply it by a 2-column matrix costs
 /// more in packing than the multiply itself saves, and the estimator's whole
-/// value is that each product is O(n^2 t) rather than O(n^3).
+/// value is that each product is O(n^2 t) rather than O(n^3). The operation is
+/// a matrix-matrix product -- it is only computed a column at a time -- so what
+/// separates it from <see cref="Gemm"/> is not its shape but whether packing
+/// amortises, which at t = 2 it does not.
 ///
 /// Both directions are written so the contiguous dimension of column-major
 /// storage is the one being streamed: A*X accumulates axpys over columns of A,
@@ -15,10 +19,10 @@ namespace Tensile.Kernels;
 /// memory, which is why the "no transposes" rule in the GEMM path costs nothing
 /// here.
 /// </summary>
-internal static unsafe class Blas2
+internal static unsafe class PanelProduct
 {
     /// <summary>Y := A * X, A being n x n column-major, X and Y being n x t.</summary>
-    public static void Multiply(
+    public static void Apply(
         int n, int t, double* a, int lda, double* x, int ldx, double* y, int ldy)
     {
         for (int col = 0; col < t; col++)
@@ -31,13 +35,13 @@ internal static unsafe class Blas2
             for (int j = 0; j < n; j++)
             {
                 double scale = source[j];
-                if (scale != 0.0) Blas1.Axpy(n, scale, a + (nint)j * lda, target);
+                if (scale != 0.0) ColumnOps.Axpy(n, scale, a + (nint)j * lda, target);
             }
         }
     }
 
     /// <summary>Y := A^T * X, A being n x n column-major, X and Y being n x t.</summary>
-    public static void MultiplyTransposed(
+    public static void ApplyTranspose(
         int n, int t, double* a, int lda, double* x, int ldx, double* y, int ldy)
     {
         for (int col = 0; col < t; col++)
@@ -46,7 +50,7 @@ internal static unsafe class Blas2
             double* target = y + (nint)col * ldy;
 
             for (int j = 0; j < n; j++)
-                target[j] = Blas1.Dot(n, a + (nint)j * lda, source);
+                target[j] = ColumnOps.Dot(n, a + (nint)j * lda, source);
         }
     }
 }

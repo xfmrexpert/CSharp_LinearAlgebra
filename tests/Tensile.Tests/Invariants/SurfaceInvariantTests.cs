@@ -68,16 +68,21 @@ public class SurfaceInvariantTests
     }
 
     /// <summary>
-    /// I3, stated separately because <c>ILinearOperator</c> is a public
-    /// extension point -- it is how expm and any matrix-free operator plug in
-    /// -- and a pointer in its signature is a pointer every implementer must
-    /// handle.
+    /// I3, stated separately because the operator interfaces are public
+    /// extension points -- they are how expm, expmv and any matrix-free
+    /// operator plug in -- and a pointer in one of their signatures is a
+    /// pointer every implementer must handle.
+    ///
+    /// Both are checked. An interface's <c>GetMethods</c> does not report the
+    /// members of the interfaces it extends, so testing only the transposable
+    /// one would leave <c>Apply</c> unexamined and testing only the base one
+    /// would leave <c>ApplyTranspose</c> unexamined.
     /// </summary>
-    [Fact]
-    public void LinearOperatorContractHasNoPointers()
+    [Theory]
+    [InlineData(typeof(ILinearOperator))]
+    [InlineData(typeof(ITransposableOperator))]
+    public void LinearOperatorContractHasNoPointers(Type contract)
     {
-        Type contract = typeof(ILinearOperator);
-
         var offenders = contract.GetMethods()
             .Where(m => TypesInvolvedIn(m).Any(IsPointerLike))
             .Select(m => m.Name)
@@ -85,7 +90,7 @@ public class SurfaceInvariantTests
 
         Assert.True(
             offenders.Count == 0,
-            "[I3] ILinearOperator members taking pointers: " + string.Join(", ", offenders));
+            $"[I3] {contract.Name} members taking pointers: " + string.Join(", ", offenders));
     }
 
     /// <summary>

@@ -58,7 +58,7 @@ public static class NormEstimate
     /// <exception cref="ArgumentOutOfRangeException">The operator's order is negative, or the n x t probe panel would not fit a buffer.</exception>
     /// <exception cref="AllocationLimitException">A probe panel would exceed <see cref="TensileLimits.MaxElements"/>.</exception>
     public static NormEstimateResult Of(
-        ILinearOperator op,
+        ITransposableOperator op,
         int columns = DefaultColumns,
         int maxIterations = DefaultMaxIterations,
         int seed = DefaultSeed)

@@ -257,6 +257,12 @@ what its buffers can hold: the views it receives are already bound and checked.
 The `n * t` overflow that motivated this document lands in the estimator's own
 allocation path, which is fixed by I7 and I9.
 
+*Later amendment, outside the scope of this document:* `ApplyTranspose` has
+since moved to a derived `ITransposableOperator`, which is what `NormEstimate`
+requires. The security argument is unchanged — both interfaces take bound views
+and neither can mint a pointer — but an operator that only applies `A` forward
+no longer has to implement a transpose it cannot compute.
+
 ### 5.5 The pinning seam — where spans become pointers
 
 The kernel assembly (§5.6) has exactly one place that turns a span into a
@@ -314,7 +320,7 @@ packing layout, asserted under `Debug` (§8, "debug assertions").
 | Assembly | `AllowUnsafeBlocks` | Visibility | Contents |
 |---|---|---|---|
 | `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator`, the `normest1` driver |
-| `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, Blas1/2, exact norms, `KernelEntry` |
+| `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, ColumnOps/Pivoting/PanelProduct, exact norms, `KernelEntry` |
 | `Tensile.Interop.Blis` | true | public, **separate package** | the BLIS binding |
 
 The reason for the split is not that a consumer cannot reference

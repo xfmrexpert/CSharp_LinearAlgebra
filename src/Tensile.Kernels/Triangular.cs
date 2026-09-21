@@ -138,7 +138,7 @@ internal static unsafe class Triangular
 
                 double value = column[p];
                 if (value != 0.0 && p + 1 < m)
-                    Blas1.Axpy(m - p - 1, -value, lp + p + 1, column + p + 1);
+                    ColumnOps.Axpy(m - p - 1, -value, lp + p + 1, column + p + 1);
             }
         }
     }
@@ -157,7 +157,7 @@ internal static unsafe class Triangular
             for (int i = m - 1; i >= 0; i--)
             {
                 double* li = l + (nint)i * ldl;
-                column[i] = (column[i] - Blas1.Dot(m - i - 1, li + i + 1, column + i + 1)) / li[i];
+                column[i] = (column[i] - ColumnOps.Dot(m - i - 1, li + i + 1, column + i + 1)) / li[i];
             }
         }
     }
@@ -181,7 +181,7 @@ internal static unsafe class Triangular
             for (int i = 0; i < m; i++)
             {
                 double* ui = u + (nint)i * ldu;
-                column[i] = (column[i] - Blas1.Dot(i, ui, column)) / ui[i];
+                column[i] = (column[i] - ColumnOps.Dot(i, ui, column)) / ui[i];
             }
         }
     }
@@ -200,7 +200,7 @@ internal static unsafe class Triangular
             for (int i = m - 1; i >= 0; i--)
             {
                 double* li = l + (nint)i * ldl;
-                column[i] -= Blas1.Dot(m - i - 1, li + i + 1, column + i + 1);
+                column[i] -= ColumnOps.Dot(m - i - 1, li + i + 1, column + i + 1);
             }
         }
     }
@@ -211,7 +211,7 @@ internal static unsafe class Triangular
         {
             double value = column[p];
             if (value != 0.0)
-                Blas1.Axpy(m - p - 1, -value, l + (nint)p * ldl + p + 1, column + p + 1);
+                ColumnOps.Axpy(m - p - 1, -value, l + (nint)p * ldl + p + 1, column + p + 1);
         }
     }
 
@@ -223,7 +223,7 @@ internal static unsafe class Triangular
 
             double value = column[p];
             if (value != 0.0 && p > 0)
-                Blas1.Axpy(p, -value, u + (nint)p * ldu, column);
+                ColumnOps.Axpy(p, -value, u + (nint)p * ldu, column);
         }
     }
 

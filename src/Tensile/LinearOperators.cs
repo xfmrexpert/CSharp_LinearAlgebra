@@ -3,15 +3,20 @@ using Tensile.Kernels;
 namespace Tensile;
 
 /// <summary>
-/// Something the 1-norm estimator can probe. Both directions are required: the
-/// algorithm alternates products with A and with A^T, and it is the A^T step
-/// that tells it which unit vectors to try next.
+/// Something that can be applied to a panel of columns without being asked for
+/// its entries. That is the point of the abstraction -- the uses are A^k (where
+/// forming the power would cost k GEMMs), A^-1 (where forming it would cost an
+/// explicit inverse, something no well-behaved library computes), and a
+/// matrix-free operator that has no entries at all. This is the extension point
+/// <c>expm</c> and <c>expmv</c> plug into, and the one a FEM or MTL operator
+/// plugs into without ever assembling a dense matrix.
 ///
-/// The operator is never asked for its entries, which is the point — the two
-/// uses are A^k (where forming the power would cost k GEMMs) and A^-1 (where
-/// forming it would cost an explicit inverse, something no well-behaved library
-/// computes). This is the extension point a matrix-free operator plugs into,
-/// and the one <c>expm</c> will use.
+/// Only the forward direction is required here. Applying A^T is a genuinely
+/// separate capability -- a matrix-free operator can very often apply A and not
+/// cheaply apply A^T -- so it lives on <see cref="ITransposableOperator"/>,
+/// which is what the 1-norm estimator asks for. Requiring both on one interface
+/// would force every implementer to supply a transpose so that one algorithm
+/// could have it.
 ///
 /// Both panels arrive as bound views, so an implementation receives their
 /// extents along with their contents and cannot be handed a buffer that is
@@ -20,7 +25,7 @@ namespace Tensile;
 /// <c>x.Columns == y.Columns</c>, and reject anything else as an argument;
 /// the estimator always satisfies both, and any other caller may not.
 ///
-/// Square operators only; the estimator needs A and A^T to map the same space.
+/// Square operators only.
 /// </summary>
 public interface ILinearOperator
 {
@@ -31,7 +36,22 @@ public interface ILinearOperator
     /// <param name="x">The panel to apply the operator to.</param>
     /// <param name="y">Receives the result. Overwritten.</param>
     void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);
+}
 
+/// <summary>
+/// An operator that can also apply its transpose.
+///
+/// Higham and Tisseur's 1-norm estimator alternates products with A and with
+/// A^T -- it is the A^T step that tells it which unit vectors to try next -- so
+/// <see cref="NormEstimate"/> requires this rather than the bare
+/// <see cref="ILinearOperator"/>. Anything that only ever applies A forward,
+/// which includes <c>expmv</c>, should take the weaker interface.
+///
+/// Both directions must map the same space, so the operator is square in the
+/// sense <see cref="ILinearOperator.Order"/> already requires.
+/// </summary>
+public interface ITransposableOperator : ILinearOperator
+{
     /// <summary>Y := A^T * X, X and Y being n x t panels of the same width.</summary>
     /// <param name="x">The panel to apply the transposed operator to.</param>
     /// <param name="y">Receives the result. Overwritten.</param>
@@ -50,7 +70,7 @@ public interface ILinearOperator
 /// to the matrix are seen by later applications. It holds no other state and
 /// is safe to apply from several threads at once.
 /// </summary>
-public sealed class DenseMatrixOperator : ILinearOperator
+public sealed class DenseMatrixOperator : ITransposableOperator
 {
     private readonly Matrix<double> _a;
     private readonly int _power;
@@ -135,7 +155,7 @@ public sealed class DenseMatrixOperator : ILinearOperator
 /// condition estimator, since cond_1(A) = ||A||_1 * ||A^-1||_1 and the second
 /// factor is exactly what the estimator can reach without forming A^-1.
 /// </summary>
-public sealed class LuInverseOperator : ILinearOperator
+public sealed class LuInverseOperator : ITransposableOperator
 {
     private readonly LuDecomposition _lu;
 

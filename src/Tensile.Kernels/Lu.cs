@@ -390,7 +390,7 @@ internal static unsafe class Lu
         {
             double* column = a + (nint)j * lda;
 
-            int pivot = j + Blas1.IndexOfMaxAbs(m - j, column + j);
+            int pivot = j + Pivoting.IndexOfMaxAbs(m - j, column + j);
             pivots[j] = pivot;
 
             double value = column[pivot];
@@ -407,7 +407,7 @@ internal static unsafe class Lu
                 // Reciprocal multiply is faster, but underflows for a
                 // denormal pivot -- fall back to division there.
                 if (Math.Abs(value) >= SafeMin)
-                    Blas1.Scale(m - j - 1, 1.0 / value, column + j + 1);
+                    ColumnOps.Scale(m - j - 1, 1.0 / value, column + j + 1);
                 else
                     for (int i = j + 1; i < m; i++) column[i] /= value;
             }
@@ -418,7 +418,7 @@ internal static unsafe class Lu
                 double* target = a + (nint)jj * lda;
                 double multiplier = target[j];
                 if (multiplier != 0.0)
-                    Blas1.Axpy(m - j - 1, -multiplier, column + j + 1, target + j + 1);
+                    ColumnOps.Axpy(m - j - 1, -multiplier, column + j + 1, target + j + 1);
             }
         }
     }

@@ -266,7 +266,7 @@ public class NormEstimateTests
         return matrix;
     }
 
-    private sealed class RecordingOperator(Matrix<double> a) : ILinearOperator
+    private sealed class RecordingOperator(Matrix<double> a) : ITransposableOperator
     {
         private readonly DenseMatrixOperator _inner = new(a);
 

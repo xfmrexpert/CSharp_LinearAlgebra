@@ -86,10 +86,42 @@ internal static unsafe class Lu
     private const double SafeMin = 2.2250738585072014e-308;
 
     /// <summary>
-    /// Default panel width. The optimum shifts with n, so this is a compromise
-    /// rather than a tuned value; pass an explicit width when it matters.
+    /// Default panel width for a matrix too large for <see cref="SmallBlockSize"/>.
     /// </summary>
     public const int DefaultBlockSize = 64;
+
+    /// <summary>Panel width below <see cref="SizeBlockSizeCrossover"/>.</summary>
+    public const int SmallBlockSize = 32;
+
+    /// <summary>
+    /// Order at or above which <see cref="DefaultBlockSize"/> takes over from
+    /// <see cref="SmallBlockSize"/>. Measured between, not derived: nb=32 wins
+    /// at n=512 and nb=64 wins at n=1024, so the true crossover is somewhere
+    /// in between and 1024 is the conservative end of that interval.
+    /// </summary>
+    public const int SizeBlockSizeCrossover = 1024;
+
+    /// <summary>
+    /// The panel width to use for an m x n matrix when the caller does not
+    /// choose one.
+    ///
+    /// Measured on a 12700H, both sweep directions agreeing at every size that
+    /// matters here. nb=32 beats nb=64 by 11.0% at n=256 and 12.6% at n=512;
+    /// nb=64 beats nb=32 by 4.6% at n=1024; at n=2048 the two are within 0.6%
+    /// and the directions disagree on which leads, so either is fine there.
+    /// nb=128 was worst at every size in both directions, by 19-33%, which has
+    /// a mechanism behind it as well as a measurement: the panel is O(m*nb^2)
+    /// level-2 work, so a wider panel moves more of the total into the slow
+    /// unblocked path.
+    ///
+    /// The small-n results are the ones worth trusting most, oddly enough:
+    /// they hold up in the descending sweep, where nb=32 runs last and
+    /// hottest and wins anyway. See CLAUDE.md finding 7.
+    /// </summary>
+    /// <param name="rows">Rows of the matrix to factor.</param>
+    /// <param name="columns">Columns of the matrix to factor.</param>
+    public static int DefaultBlockSizeFor(int rows, int columns) =>
+        Math.Min(rows, columns) < SizeBlockSizeCrossover ? SmallBlockSize : DefaultBlockSize;
 
     /// <summary>
     /// Factor the m x n column-major matrix in place as P*A = L*U. The result
@@ -98,7 +130,7 @@ internal static unsafe class Lu
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static LuFactorization Factor<TKernel>(
-        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = DefaultBlockSize)
+        int m, int n, double* a, int lda, GemmDispatch gemm, int blockSize = 0)
         where TKernel : struct, IMicroKernel
     {
         var result = new LuFactorization(m, n);
@@ -107,7 +139,7 @@ internal static unsafe class Lu
         int limit = Math.Min(m, n);
         if (limit == 0) return result;
 
-        if (blockSize < 1) blockSize = DefaultBlockSize;
+        if (blockSize < 1) blockSize = DefaultBlockSizeFor(m, n);
 
         // Small problems are all panel and no GEMM; skip the blocking machinery.
         if (blockSize >= limit)

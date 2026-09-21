@@ -172,7 +172,7 @@ public sealed class Workspace : IDisposable
         lock (_gate)
         {
             GemmDispatch dispatch = Active;
-            int nb = blockSize <= 0 ? Lu.DefaultBlockSize : blockSize;
+            int nb = blockSize <= 0 ? Lu.DefaultBlockSizeFor(a.Rows, a.Columns) : blockSize;
             Target target = a.View.ToTarget();
 
             factorization = _kernel switch

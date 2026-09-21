@@ -198,6 +198,40 @@ public abstract unsafe class LuContract<TCase> where TCase : struct, IKernelCase
         Assert.Throws<ArgumentException>(() => Lu.SolveTransposed(lu, a.Data, a.Stride, 1, b.Data, b.Stride));
     }
 
+    /// <summary>
+    /// The size-dependent default panel width, which is measured rather than
+    /// derived (see Lu.DefaultBlockSizeFor). Pinning the rule matters because
+    /// a silent revert to a fixed 64 costs 11-13% below n=1024 and nothing
+    /// would fail.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 1, 32)]
+    [InlineData(256, 256, 32)]
+    [InlineData(512, 512, 32)]
+    [InlineData(1023, 1023, 32)]
+    [InlineData(1024, 1024, 64)]
+    [InlineData(2048, 2048, 64)]
+    [InlineData(4096, 100, 32)]        // decided by the smaller dimension
+    [InlineData(100, 4096, 32)]
+    [InlineData(4096, 1024, 64)]
+    public void DefaultBlockSizeFollowsTheMeasuredCrossover(int rows, int columns, int expected) =>
+        Assert.Equal(expected, Lu.DefaultBlockSizeFor(rows, columns));
+
+    /// <summary>A block size of zero means "choose for me", and must factor correctly.</summary>
+    [Theory]
+    [InlineData(64)]
+    [InlineData(200)]
+    public void ZeroBlockSizeSelectsAWorkingDefault(int n)
+    {
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 91);
+        using var factors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, 0);
+
+        Assert.True(FactorizationResidual(lu, factors, original) < Tolerance);
+    }
+
     /// <summary>||PA - LU||_F / ||A||_F, rebuilding PA from the packed factors.</summary>
     private static double FactorizationResidual(LuFactorization lu, TestMatrix factors, TestMatrix original)
     {

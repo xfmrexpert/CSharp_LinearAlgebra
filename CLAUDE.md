@@ -91,7 +91,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 830 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 902 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -303,43 +303,45 @@ Re-taken on the 12700H, 2026-09-19: threaded (the trailing update goes through
 `GemmDispatch`, so sizes above `ParallelThreshold` use every core), unpinned,
 31 iterations, GFLOP/s from medians at (2/3)n^3 - n^2/2 - n/6 flops.
 
-| n | nb=32 | nb=64 | nb=128 |
-| --- | --- | --- | --- |
-| 256 | **20.16** | 17.54 | 13.49 |
-| 512 | **30.71** | 28.56 | 23.11 |
-| 1024 | 42.68 | **44.57** | 35.91 |
-| 2048 | 64.96 | **65.52** | 52.71 |
+Run in both directions and averaged (GFLOP/s from means, which is what the
+descending report carried):
+
+| n | nb=32 | nb=64 | nb=128 | best, both ways? |
+| --- | --- | --- | --- | --- |
+| 256 | **20.37** | 18.35 | 13.89 | nb=32, **+11.0%** |
+| 512 | **28.55** | 25.37 | 21.39 | nb=32, **+12.6%** |
+| 1024 | 40.43 | **42.29** | 34.52 | nb=64, **+4.6%** |
+| 2048 | 65.25 | **65.67** | 52.21 | tie, 0.6% apart |
 
 The old container table (18.9 / 24.5 / 26.7 at 512 / 1024 / 2048, single
 virtualised AVX2 core) is superseded and not comparable — different machine,
 different thread count.
 
-**The block-size ranking is only half settled, and the ordering says which
-half.** BenchmarkDotNet runs nb=32 before 64 before 128 within each size, so
-later block sizes run hotter (finding 7):
+**Three of the four sizes pick the same winner in both directions, and the
+small-n results are the strongest of them.** BenchmarkDotNet runs nb=32 first
+ascending and last descending, so in the descending sweep nb=32 wins at n=256
+and n=512 while running last and hottest — it beats the thermal gradient
+rather than riding it. nb=64's 4.6% at n=1024 is likewise confirmed both
+ways. At n=2048 the directions disagree over a 0.6% gap, which is a tie.
 
-- **nb=64 at n>=1024 is credible**: it wins *despite* running second, into a
-  thermal headwind. An effect that survives a headwind is worth more than one
-  that rides a tailwind.
-- **nb=32 at n<=512 is not established**: it wins while running first, which
-  is the exact shape the serial block-size sweep produced and then reversed.
-- **nb=128 losing by 19-33% is mostly real**, because there is a mechanism
-  rather than just an ordering: the panel factorization is O(m*nb^2) level-2
-  work, so a wider panel moves more of the total into the slow unblocked
-  path. That deficit is also far larger than the ~12-14% thermal artifact
-  measured in the serial sweep.
+nb=128 is worst at every size in both directions, by 19-33%, and that has a
+mechanism as well as a measurement: the panel factorization is O(m*nb^2)
+level-2 work, so a wider panel moves more of the total into the slow
+unblocked path.
 
-A descending run (`TENSILE_BENCH_REVERSE=1`) would settle the small-n
-crossover. Until then the honest statement is: nb=64 above n=1024, and the
-optimum below that is unknown.
+**The default is now size-dependent**: `Lu.DefaultBlockSizeFor` returns 32
+below order 1024 and 64 at or above it. The previous flat nb=64 was costing
+11-13% on every factorization below n=1024. The crossover sits somewhere in
+(512, 1024]; 1024 is the conservative end, since that is where nb=64 was
+actually measured to win.
 
 **Against threaded GEMM at the same thread count, LU is at 45%** — and the
 arithmetic explains the whole gap without implicating the factorization.
 
 | n | LU (best nb) | threaded GEMM, 20 threads | ratio |
 | --- | --- | --- | --- |
-| 512 | 30.71 | 126.68 | 24% |
-| 2048 | 65.52 | 147.00 | **45%** |
+| 512 | 28.55 | 126.68 | 23% |
+| 2048 | 65.67 | 147.00 | **45%** |
 
 (GEMM figures averaged over both sweep directions.) LAPACK's norm is 70-80%,
 so 45% looks alarming. It is not a defect, it is Amdahl, and the numbers
@@ -565,11 +567,13 @@ well- and ill-conditioned inputs.
   threaded first wins IS the value to set. Two shape families, because they do
   not agree: square, and the `m x m x 64` panels LU's trailing update actually
   produces. *Not yet measured on the 12700H.*
-- **LU's block size is settled only above n=1024** (nb=64, credible because it
-  wins against the thermal gradient). Below that, nb=32 won with the gradient
-  behind it, which the serial sweep taught us not to trust; a descending run
-  would settle it. And the "% of same-size GEMM" column still needs threaded
-  GEMM figures at matching sizes before it can be computed at all.
+- ~~**LU's block size is settled only above n=1024.**~~ *Closed.* Run both
+  ways: nb=32 wins at n=256 and n=512 in both directions (and in the
+  descending one it wins while running last and hottest), nb=64 wins at
+  n=1024 both ways, and n=2048 is a tie. `Lu.DefaultBlockSizeFor` is now
+  size-dependent — 32 below order 1024, 64 at or above — where the flat nb=64
+  had been costing 11-13% on smaller factorizations. What is still unmeasured
+  is the crossover's exact location, which lies somewhere in (512, 1024].
 - ~~**The thread sweep's tail needs a descending run.**~~ *Closed.* Run both
   ways and averaged: peak at 6 threads (n=2048) and 8 (n=512), identical in
   both directions; decline past the peak is 12%, not the 17-19% the ascending

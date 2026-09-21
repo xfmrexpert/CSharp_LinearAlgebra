@@ -231,6 +231,27 @@ public abstract unsafe class GemmContract<TCase> where TCase : struct, IKernelCa
     /// ParallelCrossoverBenchmarks exists to measure where this threshold
     /// belongs, which is only worth doing if moving it is safe.
     /// </summary>
+    /// <summary>
+    /// The default threshold is measured, not derived, so a silent revert to
+    /// the old 4e6 would cost 14-17% on every product between the two values
+    /// and nothing would fail. Pinned with the measurement that set it.
+    /// </summary>
+    [Fact]
+    public void DefaultParallelThresholdIsTheMeasuredCrossover()
+    {
+        Assert.Equal(16_777_216L, GemmDispatch.DefaultParallelThreshold);
+
+        // The crossover is a pure work threshold: square and panel shapes were
+        // expected to disagree and did not. 256^3 and 512^2*64 are the same
+        // work and were the first threaded win in each family.
+        Assert.Equal(GemmDispatch.DefaultParallelThreshold, 256L * 256 * 256);
+        Assert.Equal(GemmDispatch.DefaultParallelThreshold, 512L * 512 * 64);
+
+        // The largest measured serial win sits below it; the threshold must
+        // not creep back down past that shape.
+        Assert.True(192L * 192 * 192 < GemmDispatch.DefaultParallelThreshold);
+    }
+
     [Fact]
     public void ParallelThresholdChangesThePathAndNotTheAnswer()
     {

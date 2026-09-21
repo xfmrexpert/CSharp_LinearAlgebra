@@ -22,16 +22,27 @@ internal sealed unsafe class GemmDispatch : IDisposable
     /// <summary>
     /// Default work (m*n*k multiply-adds) below which the serial path wins.
     ///
-    /// A Parallel.For fork/join costs on the order of tens of microseconds, and
-    /// ParallelGemm issues 2 + ceil(m/MC) of them per k-slab. At roughly
-    /// 50 GFLOP/s single-core, 4e6 multiply-adds is about 160 us of work, which
-    /// covers several such barriers.
+    /// **Measured**, on a 12700H, by running both paths explicitly across
+    /// shapes that bracket the crossover, in both sweep directions. All eleven
+    /// shapes picked the same winner in both directions, with no disagreement
+    /// anywhere: serial ahead by 7-17% at every work below 2^24, threaded
+    /// ahead by 33-68% at every work at or above it. The largest work where
+    /// serial won was 7,077,888 and the smallest where threading won was
+    /// 16,777,216, so the true break-even lies between; 2^24 is the
+    /// conservative end of that interval, being the smallest work threading
+    /// was actually observed to win.
     ///
-    /// Derived from that argument, not measured. The crossover it approximates
-    /// is what <c>ParallelCrossoverBenchmarks</c> measures directly, on square
-    /// operands and on the panel shapes LU's trailing update actually produces.
+    /// The previous value, 4e6, was derived from a fork/join cost argument and
+    /// sat below the crossover. It threaded three measured shapes that lose by
+    /// 14-17% when threaded.
+    ///
+    /// Note this is a pure work threshold and needs no shape term. The sweep
+    /// covered square operands and the m x m x 64 panels LU's trailing update
+    /// produces, expecting them to disagree — a panel carries far more memory
+    /// traffic per flop. They did not: 256^3 and 512^2*64 are both exactly
+    /// 2^24 and both are the first threaded win in their family.
     /// </summary>
-    public const long DefaultParallelThreshold = 4_000_000;
+    public const long DefaultParallelThreshold = 16_777_216;
 
     /// <summary>
     /// Work below which <see cref="Multiply{TKernel}"/> takes the serial path,

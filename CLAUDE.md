@@ -91,7 +91,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, Blas1/2, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 902 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 905 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, estimator accuracy; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -252,6 +252,50 @@ One caveat of the usual kind: absolute figures here (136.8 GFLOP/s threaded
 at n=2048) sit ~7% below the thread sweep's 147.0 at the same thread count,
 which is the same cross-benchmark-class drift recorded elsewhere. The
 within-run comparison is what carries the result.
+
+## Serial vs threaded: the crossover is 2^24, and it has no shape term
+
+`ParallelThreshold` decides serial against threaded for every product,
+including every trailing update in LU. It was 4e6, derived from a fork/join
+cost argument and never checked. Measured by running both paths explicitly
+across shapes bracketing the crossover, in both directions, unpinned, root,
+31 iterations, ratios from medians.
+
+| work (m·n·k) | shape | ascending | descending | mean | winner |
+| --- | --- | --- | --- | --- | --- |
+| 262,144 | 64 | 1.056 | 1.267 | 1.162 | serial 16% |
+| 884,736 | 96 | 1.144 | 1.160 | 1.152 | serial 15% |
+| 2,097,152 | 128 | 1.048 | 1.085 | 1.066 | serial 7% |
+| 4,096,000 | 160 | 1.182 | 1.091 | 1.136 | serial 14% |
+| 4,194,304 | 256x64 | 1.258 | 1.089 | 1.173 | serial 17% |
+| 7,077,888 | 192 | 1.073 | 1.207 | 1.140 | serial 14% |
+| **16,777,216** | 256 | 0.702 | 0.646 | 0.674 | **threaded 33%** |
+| **16,777,216** | 512x64 | 0.557 | 0.581 | 0.569 | **threaded 43%** |
+| 56,623,104 | 384 | 0.441 | 0.419 | 0.430 | threaded 57% |
+| 67,108,864 | 1024x64 | 0.321 | 0.328 | 0.324 | threaded 68% |
+| 268,435,456 | 2048x64 | 0.358 | 0.318 | 0.338 | threaded 66% |
+
+**All eleven shapes picked the same winner in both directions — no
+disagreement anywhere.** Sorted by work the transition is perfectly clean:
+serial ahead at every work below 2^24, threaded ahead at every work at or
+above it, with no overlap. After two sweeps in this campaign where one
+direction misled, this one replicated exactly.
+
+`DefaultParallelThreshold` is now **16,777,216**. The crossover lies in
+(7,077,888, 16,777,216]; 2^24 is the conservative end, being the smallest
+work threading was actually observed to win. The old 4e6 sat below the
+crossover and threaded three measured shapes that lose 14-17% by it.
+
+**The threshold needs no shape term, which the sweep was built to find out.**
+Square operands and the `m x m x 64` panels LU's trailing update produces were
+expected to disagree — a panel carries far more memory traffic per flop — so
+both families were measured. They agree exactly: 256^3 and 512^2*64 are both
+2^24, and both are the first threaded win in their family. Work alone
+predicts the path.
+
+For LU this moves where the trailing update stops threading. At nb=64 the old
+threshold threaded until the trailing block was 250x250; the new one stops at
+512x512, leaving the tail serial where serial is measured to be faster.
 
 ## Threading: power-limited, and the baseline is a trap
 
@@ -551,22 +595,23 @@ well- and ill-conditioned inputs.
   other everywhere. See "Serial cache blocking" above. What remains is that
   NC=4096 has never been varied at all, and that the sweep covered only three
   sizes — a size-dependent MC may still be worth having.
-- **Small-n threading.** A work-based threshold *is* applied in
-  `ParallelGemm.Multiply` —
-  `Math.Clamp((int)(work / 8_000_000), 1, scratch.MaxThreads)` — with divisor
-  8M rather than the 12M once drafted, and no cap at 8: `MaxThreads` still
-  defaults to `ProcessorCount`. Whether this actually fixed the n=128 case has
-  not been re-measured on the 12700H, so the earlier 0.8-1.0x figures may
-  predate it.
-- **`GemmDispatch.ParallelThreshold` (4e6 flops) is derived, not measured.**
-  It decides serial vs threaded for every LU trailing update. Now a per-dispatch
-  property rather than a `const`, defaulting to `DefaultParallelThreshold`, so
-  a measurement can move it without a rebuild. `ParallelCrossoverBenchmarks`
-  measures the crossover directly instead of sweeping the threshold — running
-  both paths explicitly across shapes that bracket it, so the size where
-  threaded first wins IS the value to set. Two shape families, because they do
-  not agree: square, and the `m x m x 64` panels LU's trailing update actually
-  produces. *Not yet measured on the 12700H.*
+- ~~**Small-n threading.**~~ *Mostly closed.* The dispatch now keeps
+  everything below 2^24 of work on the serial path, which is measured correct
+  at every size tested from n=64 to n=192 (serial ahead 7-17%). n=128 in
+  particular is 2.1e6 of work and firmly serial. What remains unexamined is
+  the *other* small-n control, the worker-count clamp inside
+  `ParallelGemm.Multiply` — `Math.Clamp((int)(work / 8_000_000), 1,
+  scratch.MaxThreads)`. Its divisor of 8M is still derived rather than
+  measured, and it now only takes effect above 2^24, where it caps a 2^24
+  product at 2 threads. Whether that is the right cap is untested.
+- ~~**`GemmDispatch.ParallelThreshold` (4e6 flops) is derived, not measured.**~~
+  *Closed.* Measured in both directions with eleven shapes and zero
+  disagreements; the crossover is 2^24 and the threshold is now set there. The
+  two shape families turned out to agree exactly, so no shape term is needed.
+  See "Serial vs threaded" above. What is still unmeasured is the band
+  (7.08e6, 1.68e7] itself — no shape was tested inside it, so the true
+  break-even could be anywhere in there, and 2^24 is the conservative choice
+  rather than the optimal one.
 - ~~**LU's block size is settled only above n=1024.**~~ *Closed.* Run both
   ways: nb=32 wins at n=256 and n=512 in both directions (and in the
   descending one it wins while running last and hottest), nb=64 wins at

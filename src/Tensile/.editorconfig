@@ -1,0 +1,41 @@
+# Analyzer policy for the public assembly. AnalysisLevel is latest-all and
+# warnings are errors, so everything not listed here is enforced. Each entry
+# below is a rule this design contradicts on purpose, with the reason; a new
+# suppression needs a reason of the same kind.
+
+[*.cs]
+
+# Value types should override Equals. The structures (General, UpperTriangular,
+# ...) are zero-field markers dispatched on by type, never compared; the views
+# and StructuredMatrix are ref structs, which cannot be boxed or compared
+# through Equals at all. MatrixShape, the one value type with value semantics,
+# is a record struct and gets equality from the compiler.
+dotnet_diagnostic.CA1815.severity = none
+
+# Operator overloads should have named alternates. The implicit conversions
+# from Matrix<T> to its views have them: the View and ReadOnlyView properties,
+# and StructuredMatrix.View. The rule wants specific method names
+# (ToMatrixView) that would duplicate a property for the sake of a naming
+# convention.
+dotnet_diagnostic.CA2225.severity = none
+
+# Do not declare static members on generic types. MatrixView<T>.Bind is the
+# only way to make a view and must produce a MatrixView<T>; a non-generic
+# helper would need the type argument spelled out at every call.
+dotnet_diagnostic.CA1000.severity = none
+
+# Prefer jagged arrays. Matrix.FromRows takes T[,] because that is what a
+# rectangular literal is; a jagged array admits ragged rows, which is the
+# thing the method exists to rule out.
+dotnet_diagnostic.CA1814.severity = none
+
+# Implement standard exception constructors. AllocationLimitException carries
+# the request and the limit; an instance without them would be a lie, and the
+# type is sealed and constructed in one place.
+dotnet_diagnostic.CA1032.severity = none
+
+# Random is an insecure random number generator. The only randomness in the
+# library is the estimator's +/-1 probe signs, which need to be uncorrelated
+# with the matrix and reproducible from a seed; neither is a security
+# property, and a cryptographic generator is unseedable by design.
+dotnet_diagnostic.CA5394.severity = none

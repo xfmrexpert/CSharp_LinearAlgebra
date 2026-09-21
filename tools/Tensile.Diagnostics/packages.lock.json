@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "tensile": {
+        "type": "Project",
+        "dependencies": {
+          "Tensile.Kernels": "[1.0.0, )"
+        }
+      },
+      "tensile.interop.blis": {
+        "type": "Project",
+        "dependencies": {
+          "Tensile": "[1.0.0, )"
+        }
+      },
+      "tensile.kernels": {
+        "type": "Project"
+      }
+    }
+  }
+}

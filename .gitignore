@@ -4,3 +4,9 @@
 **/obj/
 *.asm
 *.user
+
+# BenchmarkDotNet writes its logs, exported markdown and generated harness
+# projects here. The numbers worth keeping go into CLAUDE.md, which states the
+# machine they came from; the raw artifacts are per-run and per-machine.
+BenchmarkDotNet.Artifacts/
+kernel.asm

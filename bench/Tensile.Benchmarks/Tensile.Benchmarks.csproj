@@ -4,6 +4,9 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
 
+    <!-- The benchmarks hand the kernels raw operands so nothing but the kernel is timed. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
     <!-- BenchmarkDotNet runs each benchmark in a generated child process and
          needs an optimized, non-tiered build to measure. Do not add
          TieredCompilation settings here: BDN sets them per job. -->
@@ -23,6 +26,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Tensile/Tensile.csproj" />
+    <ProjectReference Include="../../src/Tensile.Kernels/Tensile.Kernels.csproj" />
+    <ProjectReference Include="../../src/Tensile.Interop.Blis/Tensile.Interop.Blis.csproj" />
   </ItemGroup>
 
 </Project>

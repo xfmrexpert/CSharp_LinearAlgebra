@@ -11,8 +11,19 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Off by default. The kernel assembly, and the test, benchmark and
+         diagnostics projects that drive it directly, turn it on themselves.
+         The public assembly never does: that is invariant I4 in
+         docs/security-design.md, and it is held by the compiler rather than
+         by review. -->
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- Every project restores against a committed packages.lock.json, and CI
+         restores in locked mode, so the exact package graph that was reviewed
+         is the one that builds. A new or bumped dependency shows up as a diff
+         to the lock file, never silently. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
 </Project>

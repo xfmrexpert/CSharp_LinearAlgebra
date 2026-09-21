@@ -1,3 +1,4 @@
+using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Running;
 
 namespace Tensile.Benchmarks;
@@ -23,11 +24,15 @@ public static class Program
             typeof(GemmBenchmarks),
             typeof(KernelCeilingBenchmarks),
             typeof(LuBenchmarks),
+            typeof(ApiOverheadBenchmarks),
+            typeof(ThreadScalingBenchmarks),
+            typeof(ParallelCrossoverBenchmarks),
+            typeof(BlockSizeBenchmarks),
         };
 
-        if (BlisGemmBenchmarks.IsAvailable)
+        if (GemmVsBlisBenchmarks.IsAvailable)
         {
-            types.Add(typeof(BlisGemmBenchmarks));
+            types.Add(typeof(GemmVsBlisBenchmarks));
         }
         else
         {
@@ -36,6 +41,14 @@ public static class Program
             Console.WriteLine();
         }
 
-        BenchmarkSwitcher.FromTypes([.. types]).Run(args);
+        // The orderer is a no-op unless TENSILE_BENCH_REVERSE=1, in which case
+        // every sweep runs back to front. See ThermalOrderer, and CLAUDE.md
+        // finding 7 for why a sweep needs running in both directions at all.
+        IConfig config = ManualConfig.Create(DefaultConfig.Instance).WithOrderer(new ThermalOrderer());
+
+        if (ThermalOrderer.Reversed)
+            Console.WriteLine("TENSILE_BENCH_REVERSE=1: running cases back to front.");
+
+        BenchmarkSwitcher.FromTypes([.. types]).Run(args, config);
     }
 }

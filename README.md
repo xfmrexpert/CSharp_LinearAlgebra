@@ -13,25 +13,27 @@ managed code.
 ```csharp
 using Tensile;
 
-using var a = Matrix.FromRows(new[,] { { 4.0, 1.0 }, { 1.0, 3.0 } });
-using var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
+var a = Matrix.FromRows(new[,] { { 4.0, 1.0 }, { 1.0, 3.0 } });
+var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
 
-using Matrix<double> x = a.Solve(b);
+Matrix<double> x = a.Solve(b);
 
-using LuDecomposition lu = a.FactorLu();
+LuDecomposition lu = a.FactorLu();
 double rcond = lu.ReciprocalCondition();
 ```
 
 **[Full API guide](docs/api.md)** — matrices and views, structure-typed
-dispatch, factorizations, norms, workspaces, and dropping to the primitive
-layer.
+dispatch, factorizations, norms, workspaces, and matrix-free operators.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/Tensile` | The library. `Tensile` is the ergonomic layer; `Tensile.Primitives` is the allocation-free pointer layer; `Tensile.Interop` is the optional BLIS binding. |
+| `src/Tensile` | The public assembly: compiled with unsafe code disallowed and integer overflow checking on. Matrices, views, structures, factorizations, operators. |
+| `src/Tensile.Kernels` | The kernel assembly: micro-kernels, packing, GEMM, LU, triangular solves. All `internal`, all the library's unsafe code, reached through one pinning seam. |
+| `src/Tensile.Interop.Blis` | The optional native BLIS binding, a separate package. The only native code loading in the family; the core never references it. |
 | `tests/Tensile.Tests` | xunit suite. Contracts generic over the micro-kernel run once per supported kernel. |
+| `tests/Tensile.Fuzz` | SharpFuzz harness over the public surface, run nightly under afl++. |
 | `bench/Tensile.Benchmarks` | BenchmarkDotNet: GEMM, kernel ceiling, LU block-size sweep. |
 | `tools/Tensile.Diagnostics` | `tensile-diag`: host ISA, BLIS dispatch, estimator accuracy. Also the single process the codegen gate drives. |
 | `disasm.sh` | Dumps micro-kernel codegen and fails on accumulator spills. |
@@ -51,6 +53,12 @@ The project targets `net10.0` and requires the .NET 10 SDK. The verification
 results below were originally collected on .NET 8.
 
 ## Native BLIS comparison
+
+The binding lives in its own package, `Tensile.Interop.Blis`, which the
+benchmarks and `tensile-diag` reference and the library does not. A project
+that only uses `Tensile` carries no code that loads a native library. Read
+`src/Tensile.Interop.Blis/README.md` before pointing `TENSILE_BLIS_LIBRARY` at
+anything on a machine you do not control.
 
 On Debian/Ubuntu/Pop!_OS, install the shared library and development symlink:
 

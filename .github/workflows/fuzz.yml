@@ -1,0 +1,106 @@
+name: Nightly fuzz
+
+# Coverage-guided fuzzing of the public surface with SharpFuzz under afl++.
+# The property under test is I5 from docs/security-design.md: every public
+# entry point either produces its documented result or throws a documented
+# exception. The unit suite enumerates the hostile values somebody thought of;
+# this mutates outward from them to find the ones nobody did.
+#
+# Scheduled rather than per-PR because a useful run takes tens of minutes and
+# because a finding is a bug to file, not a red PR to re-run. Both tools are
+# open: afl++ is Apache-2.0 and comes from the distribution, SharpFuzz is MIT.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long to fuzz
+        default: '30'
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  fuzz:
+    name: SharpFuzz under afl++
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install afl++
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends afl++
+
+      - name: Build the harness
+        # Two copies of the same build: one to instrument and fuzz, one left
+        # alone to replay findings. Instrumented code writes coverage into
+        # afl's shared memory and faults outside afl, so it cannot replay.
+        run: |
+          dotnet restore tests/Tensile.Fuzz/Tensile.Fuzz.csproj --locked-mode
+          dotnet publish tests/Tensile.Fuzz/Tensile.Fuzz.csproj -c Release --no-restore -o fuzz/bin
+          dotnet publish tests/Tensile.Fuzz/Tensile.Fuzz.csproj -c Release --no-restore -o fuzz/replay
+
+      - name: Instrument the public assembly
+        # SharpFuzz rewrites the IL of the assembly under test with coverage
+        # counters afl-fuzz can read. The kernel assembly is not instrumented:
+        # the property is about the validated surface, and the kernels are
+        # covered by the residual tests and the codegen gate.
+        run: |
+          dotnet tool install --global SharpFuzz.CommandLine --version 2.3.0
+          sharpfuzz fuzz/bin/Tensile.dll
+
+      - name: Fuzz
+        env:
+          AFL_SKIP_BIN_CHECK: '1'          # the target is dotnet, instrumented in IL not in native code
+          AFL_NO_UI: '1'
+          AFL_SKIP_CPUFREQ: '1'
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: '1'
+          MINUTES: ${{ github.event.inputs.minutes || '30' }}
+        run: |
+          cd fuzz
+          afl-fuzz -i bin/Corpus -o findings -t 10000 -m none -V $((MINUTES * 60)) -- dotnet bin/Tensile.Fuzz.dll
+          echo "== fuzzer_stats"
+          grep -E 'execs_done|execs_per_sec|corpus_count|saved_crashes|saved_hangs' findings/default/fuzzer_stats
+
+      - name: Replay any findings
+        # A crash or hang directory that is not empty fails the run, and the
+        # harness replays each finding so the log shows the exception and the
+        # stack, not just that afl saw a signal. A hang replays to completion
+        # with no exception; the finding is the time it took, which the log
+        # timestamps show. The first nightly run's hangs were real: an empty
+        # matrix with two billion columns took 36 seconds to copy nothing.
+        run: |
+          shopt -s nullglob
+          findings=(fuzz/findings/default/crashes/id:* fuzz/findings/default/hangs/id:*)
+          if [ ${#findings[@]} -eq 0 ]; then echo "no findings"; exit 0; fi
+          echo "${#findings[@]} finding(s)"
+          dotnet fuzz/replay/Tensile.Fuzz.dll --replay "${findings[@]}" || true
+          exit 1
+
+      - name: Upload findings and corpus
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz/findings/default/crashes
+            fuzz/findings/default/hangs
+            fuzz/findings/default/queue
+            fuzz/findings/default/fuzzer_stats
+          if-no-files-found: ignore

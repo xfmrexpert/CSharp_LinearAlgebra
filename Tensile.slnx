@@ -4,9 +4,12 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Tensile/Tensile.csproj" />
+    <Project Path="src/Tensile.Kernels/Tensile.Kernels.csproj" />
+    <Project Path="src/Tensile.Interop.Blis/Tensile.Interop.Blis.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Tensile.Tests/Tensile.Tests.csproj" />
+    <Project Path="tests/Tensile.Fuzz/Tensile.Fuzz.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Tensile.Diagnostics/Tensile.Diagnostics.csproj" />

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Tensile.Kernels</RootNamespace>
+    <AssemblyName>Tensile.Kernels</AssemblyName>
+
+    <!-- The one assembly allowed to hold unsafe code. Every type here is
+         internal; the public assembly reaches it through InternalsVisibleTo,
+         and so do the project's own tests, benchmarks and diagnostics. A
+         consumer who references this DLL directly gains nothing short of
+         reflection. See docs/security-design.md section 5.6. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Optimize>true</Optimize>
+
+    <!-- The recommended analyzer set, as errors. Not latest-all: most of the
+         rules it adds are about pointer use, which is this assembly's job. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!-- Ships inside the Tensile package rather than as one of its own. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tensile" />
+    <InternalsVisibleTo Include="Tensile.Tests" />
+    <InternalsVisibleTo Include="Tensile.Benchmarks" />
+    <InternalsVisibleTo Include="tensile-diag" />
+  </ItemGroup>
+
+</Project>

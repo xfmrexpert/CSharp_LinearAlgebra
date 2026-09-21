@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Benchmarks;
 
@@ -43,8 +43,8 @@ public unsafe class GemmBenchmarks : IDisposable
         _b = Alloc(N * N, seed: 2);
         _c = Alloc(N * N, seed: 3);
 
-        _serial = CreateDispatch(multithreaded: false);
-        _parallel = CreateDispatch(multithreaded: true);
+        _serial = BenchmarkKernel.Serial();
+        _parallel = BenchmarkKernel.Multithreaded();
     }
 
     /// <summary>Release the operands and packing buffers.</summary>
@@ -59,32 +59,8 @@ public unsafe class GemmBenchmarks : IDisposable
     [Benchmark(Description = "Tensile, threaded")]
     public void Parallel() => Multiply(_parallel!);
 
-    private void Multiply(GemmDispatch dispatch)
-    {
-        if (Avx512Kernel16x8.IsSupported)
-            dispatch.Multiply<Avx512Kernel16x8>(N, N, N, 1.0, _a, N, _b, N, 0.0, _c, N);
-        else if (Avx2Kernel8x6.IsSupported)
-            dispatch.Multiply<Avx2Kernel8x6>(N, N, N, 1.0, _a, N, _b, N, 0.0, _c, N);
-        else
-            dispatch.Multiply<ScalarKernel4x4>(N, N, N, 1.0, _a, N, _b, N, 0.0, _c, N);
-    }
-
-    private static GemmDispatch CreateDispatch(bool multithreaded)
-    {
-        if (Avx512Kernel16x8.IsSupported)
-            return multithreaded
-                ? GemmDispatch.Multithreaded<Avx512Kernel16x8>()
-                : GemmDispatch.Serial<Avx512Kernel16x8>();
-
-        if (Avx2Kernel8x6.IsSupported)
-            return multithreaded
-                ? GemmDispatch.Multithreaded<Avx2Kernel8x6>()
-                : GemmDispatch.Serial<Avx2Kernel8x6>();
-
-        return multithreaded
-            ? GemmDispatch.Multithreaded<ScalarKernel4x4>()
-            : GemmDispatch.Serial<ScalarKernel4x4>();
-    }
+    private void Multiply(GemmDispatch dispatch) =>
+        BenchmarkKernel.Multiply(dispatch, N, N, N, _a, N, _b, N, _c, N);
 
     internal static double* Alloc(int count, int seed)
     {

@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 
@@ -10,12 +10,15 @@ namespace Tensile.Tests;
 /// L, U and P from the same input. What must hold is ||PA - LU|| / ||A|| near
 /// machine precision, and a solve whose backward error is of the same order.
 /// </summary>
-public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroKernel
+public abstract unsafe class LuContract<TCase> where TCase : struct, IKernelCase
 {
+    /// <summary>The kernel this instantiation of the contract runs against.</summary>
+    internal static readonly KernelDriver Kernel = KernelDriver.For<TCase>();
+
     private const double Tolerance = 1e-12;
 
     protected LuContract() =>
-        Assert.SkipUnless(TKernel.IsSupported, $"{TKernel.Name} is not supported on this CPU");
+        Assert.SkipUnless(Kernel.IsSupported, $"{Kernel.Name} is not supported on this CPU");
 
     /// <summary>
     /// Square, tall and wide, either side of the block size, with and without
@@ -48,11 +51,11 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     {
         using var original = TestMatrix.Random(rows, columns, seed: 42, stride: rows + padding);
         using var factors = original.Clone();
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
+        using var gemm = Kernel.Multithreaded();
 
-        using var lu = Lu.Factor<TKernel>(rows, columns, factors.Data, factors.Stride, gemm, blockSize);
+        var lu = Kernel.FactorLu(rows, columns, factors.Data, factors.Stride, gemm, blockSize);
 
-        double residual = FactorizationResidual(lu, original);
+        double residual = FactorizationResidual(lu, factors, original);
 
         Assert.True(residual < Tolerance, $"||PA-LU||/||A|| = {residual:E3}");
     }
@@ -69,10 +72,10 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         using var factors = original.Clone();
         using var b = TestMatrix.Random(n, 3, seed: 8, stride: n + 1);
         using var x = b.Clone();
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
+        using var gemm = Kernel.Multithreaded();
 
-        using var lu = Lu.Factor<TKernel>(n, n, factors.Data, factors.Stride, gemm, blockSize);
-        Lu.Solve(lu, x.Columns, x.Data, x.Stride);
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize);
+        Lu.Solve(lu, factors.Data, factors.Stride, x.Columns, x.Data, x.Stride);
 
         double error = ResidualOfSolve(original, x, b, transposed: false);
 
@@ -91,10 +94,10 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         using var factors = original.Clone();
         using var b = TestMatrix.Random(n, 3, seed: 10, stride: n + 1);
         using var x = b.Clone();
-        using var gemm = GemmDispatch.Multithreaded<TKernel>();
+        using var gemm = Kernel.Multithreaded();
 
-        using var lu = Lu.Factor<TKernel>(n, n, factors.Data, factors.Stride, gemm, blockSize);
-        Lu.SolveTransposed(lu, x.Columns, x.Data, x.Stride);
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize);
+        Lu.SolveTransposed(lu, factors.Data, factors.Stride, x.Columns, x.Data, x.Stride);
 
         double error = ResidualOfSolve(original, x, b, transposed: true);
 
@@ -118,13 +121,13 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         const int n = 48;
 
         using var original = TestMatrix.Random(n, n, seed: 11);
-        using var gemm = GemmDispatch.Serial<TKernel>();
+        using var gemm = Kernel.Serial();
 
         using var blockedFactors = original.Clone();
         using var unblockedFactors = original.Clone();
 
-        using var blocked = Lu.Factor<TKernel>(n, n, blockedFactors.Data, blockedFactors.Stride, gemm, 8);
-        using var unblocked = Lu.Factor<TKernel>(n, n, unblockedFactors.Data, unblockedFactors.Stride, gemm, n);
+        var blocked = Kernel.FactorLu(n, n, blockedFactors.Data, blockedFactors.Stride, gemm, 8);
+        var unblocked = Kernel.FactorLu(n, n, unblockedFactors.Data, unblockedFactors.Stride, gemm, n);
 
         for (int i = 0; i < n; i++)
             Assert.Equal(blocked.Pivots[i], unblocked.Pivots[i]);
@@ -134,8 +137,8 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
 
         // Both must actually be factorizations of the original, not merely of
         // each other.
-        Assert.True(FactorizationResidual(blocked, original) < Tolerance);
-        Assert.True(FactorizationResidual(unblocked, original) < Tolerance);
+        Assert.True(FactorizationResidual(blocked, blockedFactors, original) < Tolerance);
+        Assert.True(FactorizationResidual(unblocked, unblockedFactors, original) < Tolerance);
     }
 
     /// <summary>
@@ -150,15 +153,15 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 12);
         for (int i = 0; i < n; i++) a[i, 5] = 0.0;
 
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(n, n, a.Data, a.Stride, gemm, 4);
+        using var gemm = Kernel.Serial();
+        var lu = Kernel.FactorLu(n, n, a.Data, a.Stride, gemm, 4);
 
         Assert.True(lu.IsSingular);
         Assert.Equal(5, lu.SingularColumn);
 
         using var b = TestMatrix.Random(n, 1, seed: 13);
-        Assert.Throws<InvalidOperationException>(() => Lu.Solve(lu, 1, b.Data, b.Stride));
-        Assert.Throws<InvalidOperationException>(() => Lu.SolveTransposed(lu, 1, b.Data, b.Stride));
+        Assert.Throws<InvalidOperationException>(() => Lu.Solve(lu, a.Data, a.Stride, 1, b.Data, b.Stride));
+        Assert.Throws<InvalidOperationException>(() => Lu.SolveTransposed(lu, a.Data, a.Stride, 1, b.Data, b.Stride));
     }
 
     /// <summary>
@@ -175,8 +178,8 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
         using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 14);
         for (int i = 0; i < n; i++) a[i, 9] = a[i, 3];
 
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(n, n, a.Data, a.Stride, gemm, 8);
+        using var gemm = Kernel.Serial();
+        var lu = Kernel.FactorLu(n, n, a.Data, a.Stride, gemm, 8);
 
         Assert.False(lu.IsSingular);
         Assert.True(lu.PivotRatio < 1e-14, $"pivot ratio {lu.PivotRatio:E3} should be tiny");
@@ -186,17 +189,154 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     public void NonSquareSolveIsRejected()
     {
         using var a = TestMatrix.Random(12, 8, seed: 15);
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(12, 8, a.Data, a.Stride, gemm, 4);
+        using var gemm = Kernel.Serial();
+        var lu = Kernel.FactorLu(12, 8, a.Data, a.Stride, gemm, 4);
 
         using var b = TestMatrix.Random(12, 1, seed: 16);
 
-        Assert.Throws<ArgumentException>(() => Lu.Solve(lu, 1, b.Data, b.Stride));
-        Assert.Throws<ArgumentException>(() => Lu.SolveTransposed(lu, 1, b.Data, b.Stride));
+        Assert.Throws<ArgumentException>(() => Lu.Solve(lu, a.Data, a.Stride, 1, b.Data, b.Stride));
+        Assert.Throws<ArgumentException>(() => Lu.SolveTransposed(lu, a.Data, a.Stride, 1, b.Data, b.Stride));
+    }
+
+    /// <summary>
+    /// The size-dependent default panel width, which is measured rather than
+    /// derived (see Lu.DefaultBlockSizeFor). Pinning the rule matters because
+    /// a silent revert to a fixed 64 costs 11-13% below n=1024 and nothing
+    /// would fail.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 1, 32)]
+    [InlineData(256, 256, 32)]
+    [InlineData(512, 512, 32)]
+    [InlineData(1023, 1023, 32)]
+    [InlineData(1024, 1024, 64)]
+    [InlineData(2048, 2048, 64)]
+    [InlineData(4096, 100, 32)]        // decided by the smaller dimension
+    [InlineData(100, 4096, 32)]
+    [InlineData(4096, 1024, 64)]
+    public void DefaultBlockSizeFollowsTheMeasuredCrossover(int rows, int columns, int expected) =>
+        Assert.Equal(expected, Lu.DefaultBlockSizeFor(rows, columns));
+
+    /// <summary>A block size of zero means "choose for me", and must factor correctly.</summary>
+    [Theory]
+    [InlineData(64)]
+    [InlineData(200)]
+    public void ZeroBlockSizeSelectsAWorkingDefault(int n)
+    {
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 91);
+        using var factors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, 0);
+
+        Assert.True(FactorizationResidual(lu, factors, original) < Tolerance);
+    }
+
+    /// <summary>
+    /// Phase timing is an instrument, so what must hold of it is structural
+    /// rather than numeric: the four phases are charged out of intervals of
+    /// one loop, so their sum cannot exceed that loop's own total, and the
+    /// residue between the two is what <see cref="LuPhaseTimings.Unattributed"/>
+    /// reports. Asserting on the durations themselves would be asserting on the
+    /// machine.
+    /// </summary>
+    [Fact]
+    public void PhaseTimingsAccountForTheWholeLoop()
+    {
+        const int n = 256;
+        const int blockSize = 32;
+
+        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: 77);
+        using var factors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var timings = new LuPhaseTimings();
+        var lu = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize, timings);
+
+        Assert.Equal(n / blockSize, timings.BlockSteps);
+        Assert.True(timings.Total > 0, "the blocked loop took no measurable time at all");
+
+        long phases = timings.Panel + timings.Swaps + timings.Triangular + timings.Gemm;
+
+        Assert.True(phases <= timings.Total, $"phases {phases} exceed the loop total {timings.Total}");
+        Assert.Equal(timings.Total - phases, timings.Unattributed);
+
+        double shares = timings.Share(timings.Panel) + timings.Share(timings.Swaps)
+            + timings.Share(timings.Triangular) + timings.Share(timings.Gemm)
+            + timings.Share(timings.Unattributed);
+
+        Assert.Equal(100.0, shares, 9);
+
+        // The instrumented run must still be a factorization, not merely timed.
+        Assert.True(FactorizationResidual(lu, factors, original) < Tolerance);
+    }
+
+    /// <summary>
+    /// Collecting the timings must not perturb what is being timed.
+    ///
+    /// Bit-identical is the right assertion here and only here: this is one
+    /// code path run twice, not two paths compared, so every product is summed
+    /// in the same order both times. Any difference at all would mean the
+    /// instrument had changed the arithmetic.
+    /// </summary>
+    [Fact]
+    public void CollectingPhaseTimingsDoesNotChangeTheFactorization()
+    {
+        const int n = 96;
+        const int blockSize = 16;
+
+        using var original = TestMatrix.Random(n, n, seed: 78);
+        using var timedFactors = original.Clone();
+        using var untimedFactors = original.Clone();
+        using var gemm = Kernel.Serial();
+
+        var timed = Kernel.FactorLu(n, n, timedFactors.Data, timedFactors.Stride, gemm, blockSize, new LuPhaseTimings());
+        var untimed = Kernel.FactorLu(n, n, untimedFactors.Data, untimedFactors.Stride, gemm, blockSize);
+
+        Assert.Equal(untimed.Pivots, timed.Pivots);
+        Assert.Equal(0.0, timedFactors.MaxDifference(untimedFactors));
+        Assert.Equal(untimed.SingularColumn, timed.SingularColumn);
+        Assert.Equal(untimed.SmallestPivot, timed.SmallestPivot);
+        Assert.Equal(untimed.LargestPivot, timed.LargestPivot);
+    }
+
+    /// <summary>
+    /// Pooling over repetitions is how the diagnostics report gets a stable
+    /// split out of runs that are individually noisy, so the sum has to be a
+    /// sum of every field rather than of the ones that happened to be needed.
+    /// </summary>
+    [Fact]
+    public void PhaseTimingsPoolAcrossRuns()
+    {
+        const int n = 128;
+        const int blockSize = 32;
+
+        using var gemm = Kernel.Serial();
+
+        var pooled = new LuPhaseTimings();
+        var separate = new LuPhaseTimings[3];
+
+        for (int rep = 0; rep < separate.Length; rep++)
+        {
+            using var factors = TestMatrix.RandomDiagonallyDominant(n, seed: 80 + rep);
+
+            separate[rep] = new LuPhaseTimings();
+            _ = Kernel.FactorLu(n, n, factors.Data, factors.Stride, gemm, blockSize, separate[rep]);
+
+            pooled.Add(separate[rep]);
+        }
+
+        Assert.Equal(separate.Sum(t => t.Panel), pooled.Panel);
+        Assert.Equal(separate.Sum(t => t.Swaps), pooled.Swaps);
+        Assert.Equal(separate.Sum(t => t.Triangular), pooled.Triangular);
+        Assert.Equal(separate.Sum(t => t.Gemm), pooled.Gemm);
+        Assert.Equal(separate.Sum(t => t.Total), pooled.Total);
+        Assert.Equal(separate.Sum(t => t.BlockSteps), pooled.BlockSteps);
+        Assert.Throws<ArgumentNullException>(() => pooled.Add(null!));
     }
 
     /// <summary>||PA - LU||_F / ||A||_F, rebuilding PA from the packed factors.</summary>
-    private static double FactorizationResidual(LuFactorization lu, TestMatrix original)
+    private static double FactorizationResidual(LuFactorization lu, TestMatrix factors, TestMatrix original)
     {
         int m = lu.Rows;
         int n = lu.Columns;
@@ -213,8 +353,8 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
 
                 for (int p = 0; p < k; p++)
                 {
-                    double lower = i == p ? 1.0 : (i > p ? lu.Factors[(nint)p * lu.Stride + i] : 0.0);
-                    double upper = p <= j ? lu.Factors[(nint)j * lu.Stride + p] : 0.0;
+                    double lower = i == p ? 1.0 : (i > p ? factors[i, p] : 0.0);
+                    double upper = p <= j ? factors[p, j] : 0.0;
                     sum += lower * upper;
                 }
 
@@ -271,6 +411,6 @@ public abstract unsafe class LuContract<TKernel> where TKernel : struct, IMicroK
     }
 }
 
-public sealed class ScalarLuTests : LuContract<ScalarKernel4x4>;
-public sealed class Avx2LuTests : LuContract<Avx2Kernel8x6>;
-public sealed class Avx512LuTests : LuContract<Avx512Kernel16x8>;
+public sealed class ScalarLuTests : LuContract<ScalarCase>;
+public sealed class Avx2LuTests : LuContract<Avx2Case>;
+public sealed class Avx512LuTests : LuContract<Avx512Case>;

@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -83,6 +83,8 @@ public readonly struct UpperTriangular : ITriangularStructure
     /// <inheritdoc/>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = j + 1; i < a.Rows; i++)
                 if (a[i, j] != 0.0) return false;
@@ -91,12 +93,12 @@ public readonly struct UpperTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveUpper(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveUpper(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveUpperTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveUpperTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>
@@ -111,6 +113,8 @@ public readonly struct LowerTriangular : ITriangularStructure
     /// <inheritdoc/>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = 0; i < Math.Min(j, a.Rows); i++)
                 if (a[i, j] != 0.0) return false;
@@ -119,12 +123,12 @@ public readonly struct LowerTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLower(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLower(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>
@@ -145,6 +149,8 @@ public readonly struct UnitLowerTriangular : ITriangularStructure
     /// <param name="a">The matrix to inspect.</param>
     public static bool UnreferencedPartIsZero(ReadOnlyMatrixView<double> a)
     {
+        if (a.IsEmpty) return true;
+
         for (int j = 0; j < a.Columns; j++)
             for (int i = 0; i < Math.Min(j, a.Rows); i++)
                 if (a[i, j] != 0.0) return false;
@@ -153,12 +159,12 @@ public readonly struct UnitLowerTriangular : ITriangularStructure
     }
 
     /// <inheritdoc/>
-    public static unsafe void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerUnit(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerUnit(a.ToOperand(), b.ToTarget());
 
     /// <inheritdoc/>
-    public static unsafe void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
-        Triangular.SolveLowerUnitTransposed(a.Rows, b.Columns, a.Pointer, a.Stride, b.Pointer, b.Stride);
+    public static void SolveTransposedInPlace(ReadOnlyMatrixView<double> a, MatrixView<double> b) =>
+        KernelEntry.SolveLowerUnitTransposed(a.ToOperand(), b.ToTarget());
 }
 
 /// <summary>

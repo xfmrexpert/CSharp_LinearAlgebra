@@ -32,6 +32,11 @@ if [[ ! -x "$BINARY" ]]; then
     dotnet build -c "$CONFIGURATION" "$PROJECT" >/dev/null
 fi
 
+# The JIT appends to an existing dump file rather than replacing it, so a
+# second run against the same path would report every kernel twice and double
+# every count below. Start from an empty file.
+: > "$OUT"
+
 DOTNET_JitDisasm="Execute" \
 DOTNET_JitStdOutFile="$OUT" \
 DOTNET_TieredCompilation=0 \
@@ -63,12 +68,12 @@ FAILED=0
 
 printf '%-30s %8s %8s\n' "kernel" "FMAs" "spills"
 
-for listing in "$WORK"/Tensile.Primitives.*Kernel*Execute.txt; do
+for listing in "$WORK"/Tensile.Kernels.*Kernel*Execute.txt; do
     [[ -e "$listing" ]] || continue
 
     FOUND=$((FOUND + 1))
     name="$(basename "$listing" .txt)"
-    name="${name#Tensile.Primitives.}"
+    name="${name#Tensile.Kernels.}"
 
     fmas=$(grep -c "vfmadd" "$listing" || true)
     spills=$(grep -cE "$SPILL_PATTERN" "$listing" || true)

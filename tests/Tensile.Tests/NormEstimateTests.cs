@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 
@@ -20,8 +20,13 @@ namespace Tensile.Tests;
 /// The first three between them exercise every piece of the bookkeeping -- the
 /// sign matrix, the transposed product, the row maxima, the descending sort and
 /// the unit-vector selection -- without ever asserting a specific estimate.
+///
+/// The estimator is driven through its public shape, an
+/// <see cref="ILinearOperator"/> over a <see cref="Matrix{T}"/>, since that is
+/// the only shape it has; the exact norms it is checked against are the
+/// kernel layer's, over pointers, so the two sides share no code.
 /// </summary>
-public unsafe class NormEstimateTests
+public class NormEstimateTests
 {
     public static TheoryData<int> Orders => new() { 1, 2, 3, 5, 8, 16, 17, 40, 64 };
 
@@ -31,10 +36,10 @@ public unsafe class NormEstimateTests
     {
         for (int trial = 0; trial < 5; trial++)
         {
-            using var a = TestMatrix.Random(n, n, seed: n * 10 + trial, stride: n + 2);
+            Matrix<double> a = Random(n, seed: n * 10 + trial, stride: n + 2);
 
-            double truth = Norms.One(n, n, a.Data, a.Stride);
-            double estimate = NormEstimate.OfMatrix(n, a.Data, a.Stride, power: 1, columns: n).Value;
+            double truth = a.OneNorm();
+            double estimate = Estimate(a, columns: n);
 
             Assert.True(
                 Math.Abs(estimate - truth) <= 1e-12 * truth,
@@ -48,10 +53,10 @@ public unsafe class NormEstimateTests
     {
         for (int trial = 0; trial < 5; trial++)
         {
-            using var a = NonNegative(n, seed: n * 20 + trial);
+            Matrix<double> a = NonNegative(n, seed: n * 20 + trial);
 
-            double truth = Norms.One(n, n, a.Data, a.Stride);
-            double estimate = NormEstimate.OfMatrix(n, a.Data, a.Stride).Value;
+            double truth = a.OneNorm();
+            double estimate = Estimate(a);
 
             Assert.True(
                 Math.Abs(estimate - truth) <= 1e-12 * truth,
@@ -65,13 +70,13 @@ public unsafe class NormEstimateTests
     {
         for (int trial = 0; trial < 10; trial++)
         {
-            using var a = TestMatrix.Random(n, n, seed: n * 30 + trial);
+            Matrix<double> a = Random(n, seed: n * 30 + trial);
 
-            double truth = Norms.One(n, n, a.Data, a.Stride);
+            double truth = a.OneNorm();
 
             foreach (int columns in new[] { 1, 2, 4 })
             {
-                double estimate = NormEstimate.OfMatrix(n, a.Data, a.Stride, power: 1, columns: columns).Value;
+                double estimate = Estimate(a, columns: columns);
 
                 Assert.True(
                     estimate <= truth * (1.0 + 1e-12),
@@ -85,10 +90,11 @@ public unsafe class NormEstimateTests
     {
         const int n = 64;
 
-        using var a = TestMatrix.Random(n, n, seed: 99);
+        Matrix<double> a = Random(n, seed: 99);
+        var op = new DenseMatrixOperator(a);
 
-        var first = NormEstimate.OfMatrix(n, a.Data, a.Stride);
-        var second = NormEstimate.OfMatrix(n, a.Data, a.Stride);
+        NormEstimateResult first = NormEstimate.Of(op);
+        NormEstimateResult second = NormEstimate.Of(op);
 
         Assert.Equal(first, second);
     }
@@ -99,14 +105,13 @@ public unsafe class NormEstimateTests
     {
         const int n = 48;
 
-        using var a = TestMatrix.Random(n, n, seed: 101);
-        double truth = Norms.One(n, n, a.Data, a.Stride);
+        Matrix<double> a = Random(n, seed: 101);
+        double truth = a.OneNorm();
 
         for (int seed = 0; seed < 25; seed++)
         {
             double estimate = NormEstimate
-                .OfMatrix(n, a.Data, a.Stride, power: 1, columns: 2,
-                    maxIterations: NormEstimate.DefaultMaxIterations, seed: seed)
+                .Of(new DenseMatrixOperator(a), columns: 2, maxIterations: NormEstimate.DefaultMaxIterations, seed: seed)
                 .Value;
 
             Assert.True(estimate <= truth * (1.0 + 1e-12), $"seed {seed}: {estimate:E17} > {truth:E17}");
@@ -127,9 +132,9 @@ public unsafe class NormEstimateTests
     [InlineData(33, 3)]
     public void MatrixPowerMatchesExplicitPower(int n, int power)
     {
-        using var a = NonNegative(n, seed: n * 7 + power, scale: 1.0 / n);
-        using var accumulated = a.Clone();
-        using var work = new TestMatrix(n, n);
+        Matrix<double> a = NonNegative(n, seed: n * 7 + power, scale: 1.0 / n);
+        Matrix<double> accumulated = a.Clone();
+        var work = new Matrix<double>(n, n);
 
         for (int step = 1; step < power; step++)
         {
@@ -143,13 +148,11 @@ public unsafe class NormEstimateTests
                 }
             }
 
-            for (int j = 0; j < n; j++)
-                for (int i = 0; i < n; i++)
-                    accumulated[i, j] = work[i, j];
+            work.View.CopyTo(accumulated.View);
         }
 
-        double truth = Norms.One(n, n, accumulated.Data, accumulated.Stride);
-        double estimate = NormEstimate.OfMatrix(n, a.Data, a.Stride, power).Value;
+        double truth = accumulated.OneNorm();
+        double estimate = a.EstimateOneNorm(power);
 
         Assert.True(
             Math.Abs(estimate - truth) <= 1e-10 * truth,
@@ -159,15 +162,49 @@ public unsafe class NormEstimateTests
     [Fact]
     public void ZeroOrderOperatorIsHandled()
     {
-        var result = NormEstimate.OfMatrix(0, null, 1);
+        NormEstimateResult result = NormEstimate.Of(new DenseMatrixOperator(new Matrix<double>(0, 0)));
 
         Assert.Equal(0.0, result.Value);
         Assert.Equal(0, result.Iterations);
     }
 
+    /// <summary>
+    /// The operator's own validation: panels whose rows disagree with the
+    /// order, or whose widths disagree with each other, are argument errors
+    /// and never reach the kernel.
+    /// </summary>
+    [Fact]
+    public void DenseOperatorRejectsMismatchedPanels()
+    {
+        var op = new DenseMatrixOperator(Matrix.Identity<double>(4));
+
+        Assert.Throws<ArgumentException>(() => op.Apply(new Matrix<double>(3, 2), new Matrix<double>(4, 2)));
+        Assert.Throws<ArgumentException>(() => op.Apply(new Matrix<double>(4, 2), new Matrix<double>(4, 3)));
+        Assert.Throws<ArgumentException>(() => op.ApplyTranspose(new Matrix<double>(4, 2), new Matrix<double>(5, 2)));
+        Assert.Throws<ArgumentException>(() => new DenseMatrixOperator(new Matrix<double>(3, 4)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DenseMatrixOperator(Matrix.Identity<double>(4), power: 0));
+    }
+
+    /// <summary>
+    /// Every product the estimator asks for stays within the panels it hands
+    /// out. An operator that records what it was given is the cheapest way to
+    /// see the estimator's side of the contract.
+    /// </summary>
+    [Fact]
+    public void EstimatorHandsOperatorConsistentPanels()
+    {
+        const int n = 12;
+        var recorder = new RecordingOperator(Random(n, seed: 5));
+
+        NormEstimate.Of(recorder, columns: 3);
+
+        Assert.NotEmpty(recorder.Shapes);
+        Assert.All(recorder.Shapes, shape => Assert.Equal((n, 3, n, 3), shape));
+    }
+
     [Theory]
     [MemberData(nameof(Orders))]
-    public void OneNormMatchesNaiveColumnSums(int n)
+    public unsafe void OneNormMatchesNaiveColumnSums(int n)
     {
         using var a = TestMatrix.Random(n, n, seed: n + 555, stride: n + 4);
 
@@ -185,7 +222,7 @@ public unsafe class NormEstimateTests
 
     [Theory]
     [MemberData(nameof(Orders))]
-    public void InfinityNormMatchesNaiveRowSums(int n)
+    public unsafe void InfinityNormMatchesNaiveRowSums(int n)
     {
         using var a = TestMatrix.Random(n, n, seed: n + 666, stride: n + 4);
 
@@ -201,9 +238,25 @@ public unsafe class NormEstimateTests
         Assert.Equal(expected, Norms.Infinity(n, n, a.Data, a.Stride), 12);
     }
 
-    private static TestMatrix NonNegative(int n, int seed, double scale = 1.0)
+    private static double Estimate(Matrix<double> a, int columns = NormEstimate.DefaultColumns) =>
+        NormEstimate.Of(new DenseMatrixOperator(a), columns).Value;
+
+    /// <summary>Uniform random entries in [-0.5, 0.5], with an optional stride so padding is exercised.</summary>
+    private static Matrix<double> Random(int n, int seed, int stride = 0)
     {
-        var matrix = new TestMatrix(n, n, stride: n + 2);
+        var matrix = new Matrix<double>(n, n, stride);
+        var rng = new Random(seed);
+
+        for (int j = 0; j < n; j++)
+            for (int i = 0; i < n; i++)
+                matrix[i, j] = rng.NextDouble() - 0.5;
+
+        return matrix;
+    }
+
+    private static Matrix<double> NonNegative(int n, int seed, double scale = 1.0)
+    {
+        var matrix = new Matrix<double>(n, n, stride: n + 2);
         var rng = new Random(seed);
 
         for (int j = 0; j < n; j++)
@@ -212,31 +265,53 @@ public unsafe class NormEstimateTests
 
         return matrix;
     }
+
+    private sealed class RecordingOperator(Matrix<double> a) : ILinearOperator
+    {
+        private readonly DenseMatrixOperator _inner = new(a);
+
+        public List<(int, int, int, int)> Shapes { get; } = [];
+
+        public int Order => _inner.Order;
+
+        public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+        {
+            Shapes.Add((x.Rows, x.Columns, y.Rows, y.Columns));
+            _inner.Apply(x, y);
+        }
+
+        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+        {
+            Shapes.Add((x.Rows, x.Columns, y.Rows, y.Columns));
+            _inner.ApplyTranspose(x, y);
+        }
+    }
 }
 
 /// <summary>
 /// Condition estimation, which is the norm estimator applied to A^-1 through
-/// the LU factors.
+/// the LU factors. Generic over the kernel because the trailing update of the
+/// factorization is a GEMM, and a wrong kernel there would surface here.
 /// </summary>
-public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, IMicroKernel
+public abstract class ConditionContract<TCase> where TCase : struct, IKernelCase
 {
-    protected ConditionContract() =>
-        Assert.SkipUnless(TKernel.IsSupported, $"{TKernel.Name} is not supported on this CPU");
+    /// <summary>The kernel this instantiation of the contract runs against.</summary>
+    internal static readonly KernelDriver Kernel = KernelDriver.For<TCase>();
+
+    private readonly Workspace _workspace;
+
+    protected ConditionContract()
+    {
+        Assert.SkipUnless(Kernel.IsSupported, $"{Kernel.Name} is not supported on this CPU");
+        _workspace = Kernel.Workspace(multithreaded: false);
+    }
 
     [Fact]
     public void IdentityIsPerfectlyConditioned()
     {
-        const int n = 40;
+        LuDecomposition lu = Matrix.Identity<double>(40).FactorLu(blockSize: 8, _workspace);
 
-        using var a = new TestMatrix(n, n);
-        for (int i = 0; i < n; i++) a[i, i] = 1.0;
-
-        double norm = Norms.One(n, n, a.Data, a.Stride);
-
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(n, n, a.Data, a.Stride, gemm, 8);
-
-        Assert.Equal(1.0, Condition.ReciprocalOne(norm, lu), 12);
+        Assert.Equal(1.0, lu.ReciprocalCondition(), 12);
     }
 
     /// <summary>
@@ -254,23 +329,16 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
     [InlineData(48)]
     public void TracksTheExactReciprocalCondition(int n)
     {
-        using var original = TestMatrix.RandomDiagonallyDominant(n, seed: n * 3);
-        using var factors = original.Clone();
-
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(n, n, factors.Data, factors.Stride, gemm, 8);
-
-        double normOfA = Norms.One(n, n, original.Data, original.Stride);
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: n * 3);
+        LuDecomposition lu = a.FactorLu(blockSize: 8, _workspace);
 
         // A^-1 by solving against the identity.
-        using var inverse = new TestMatrix(n, n);
-        for (int i = 0; i < n; i++) inverse[i, i] = 1.0;
-        Lu.Solve(lu, n, inverse.Data, inverse.Stride);
+        Matrix<double> inverse = lu.Solve(Matrix.Identity<double>(n));
 
-        double exact = 1.0 / (normOfA * Norms.One(n, n, inverse.Data, inverse.Stride));
+        double exact = 1.0 / (a.OneNorm() * inverse.OneNorm());
 
-        double estimated = Condition.ReciprocalOne(normOfA, lu);
-        double full = Condition.ReciprocalOne(normOfA, lu, columns: n);
+        double estimated = lu.ReciprocalCondition();
+        double full = lu.ReciprocalCondition(columns: n);
 
         Assert.True(estimated >= exact * (1.0 - 1e-10),
             $"n={n}: rcond estimate {estimated:E6} is below the exact {exact:E6}");
@@ -288,17 +356,12 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
 
         foreach (int n in new[] { 4, 6, 8, 10, 12 })
         {
-            using var a = new TestMatrix(n, n);
+            var a = new Matrix<double>(n, n);
             for (int j = 0; j < n; j++)
                 for (int i = 0; i < n; i++)
                     a[i, j] = 1.0 / (i + j + 1);
 
-            double norm = Norms.One(n, n, a.Data, a.Stride);
-
-            using var gemm = GemmDispatch.Serial<TKernel>();
-            using var lu = Lu.Factor<TKernel>(n, n, a.Data, a.Stride, gemm, 4);
-
-            double rcond = Condition.ReciprocalOne(norm, lu);
+            double rcond = a.FactorLu(blockSize: 4, _workspace).ReciprocalCondition();
 
             Assert.True(rcond < previous, $"rcond at n={n} ({rcond:E3}) did not fall below {previous:E3}");
             previous = rcond;
@@ -312,18 +375,29 @@ public abstract unsafe class ConditionContract<TKernel> where TKernel : struct, 
     {
         const int n = 12;
 
-        using var a = TestMatrix.RandomDiagonallyDominant(n, seed: 77);
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 77);
         for (int i = 0; i < n; i++) a[i, 4] = 0.0;
 
-        double norm = Norms.One(n, n, a.Data, a.Stride);
+        LuDecomposition lu = a.FactorLu(blockSize: 4, _workspace);
 
-        using var gemm = GemmDispatch.Serial<TKernel>();
-        using var lu = Lu.Factor<TKernel>(n, n, a.Data, a.Stride, gemm, 4);
+        Assert.True(lu.IsSingular);
+        Assert.Equal(0.0, lu.ReciprocalCondition());
+    }
 
-        Assert.Equal(0.0, Condition.ReciprocalOne(norm, lu));
+    private static Matrix<double> RandomDiagonallyDominant(int n, int seed)
+    {
+        var matrix = new Matrix<double>(n, n);
+        var rng = new Random(seed);
+
+        for (int j = 0; j < n; j++)
+            for (int i = 0; i < n; i++)
+                matrix[i, j] = rng.NextDouble() - 0.5;
+
+        for (int i = 0; i < n; i++) matrix[i, i] += n;
+        return matrix;
     }
 }
 
-public sealed class ScalarConditionTests : ConditionContract<ScalarKernel4x4>;
-public sealed class Avx2ConditionTests : ConditionContract<Avx2Kernel8x6>;
-public sealed class Avx512ConditionTests : ConditionContract<Avx512Kernel16x8>;
+public sealed class ScalarConditionTests : ConditionContract<ScalarCase>;
+public sealed class Avx2ConditionTests : ConditionContract<Avx2Case>;
+public sealed class Avx512ConditionTests : ConditionContract<Avx512Case>;

@@ -3,17 +3,18 @@
 Dense linear algebra for .NET. Column-major, double precision, with hand-written
 micro-kernels underneath.
 
-The surface is two layers, and which one you want depends on whether allocation
-matters to you.
+Everything public is in one namespace, `Tensile`, in one assembly that is
+compiled with unsafe code disallowed and integer overflow checking on. The
+kernels — micro-kernels, packing, blocked GEMM, LU — live in a second assembly,
+`Tensile.Kernels`, whose types are all internal. There is no public pointer
+anywhere, and no supported way to reach the kernels except through the types
+below. What you give up is an O(1) shape check per call against work that is
+at minimum O(n²); what you get is that a wrong dimension is an exception rather
+than a write to someone else's memory. The reasoning is in
+`docs/security-design.md`.
 
-| Layer | Namespace | For |
-| --- | --- | --- |
-| Ergonomic | `Tensile` | Ordinary code. Allocates results, owns its memory, checks its arguments. |
-| Primitives | `Tensile.Primitives` | Inner loops. Pointers, strides, caller-supplied buffers, no validation. |
-| Interop | `Tensile.Interop` | The optional BLIS binding, used as a benchmark baseline. |
-
-Nothing in the ergonomic layer hides anything in the primitive layer: both are
-public, and dropping down is a supported move rather than an escape hatch.
+Zero-copy over your own storage is still available: bind a span to a shape and
+the library works on it in place. See *Matrices and views*.
 
 ---
 
@@ -22,21 +23,23 @@ public, and dropping down is a supported move rather than an escape hatch.
 ```csharp
 using Tensile;
 
-using var a = Matrix.FromRows(new[,]
+var a = Matrix.FromRows(new[,]
 {
     { 4.0, 1.0 },
     { 1.0, 3.0 },
 });
 
-using var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
+var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
 
-using Matrix<double> x = a.Solve(b);        // LU with partial pivoting
-using Matrix<double> product = a.Multiply(x);   // blocked GEMM
+Matrix<double> x = a.Solve(b);        // LU with partial pivoting
+Matrix<double> product = a.Multiply(x);   // blocked GEMM
 ```
 
-Everything that owns storage is `IDisposable`, because the storage is native
-rather than a `T[]`. Dropping a reference does not corrupt anything — the
-finalizer still frees — but it leaks until the next GC notices.
+Nothing here is `IDisposable`. A `Matrix<T>` owns a pinned managed array, and a
+view over it is a reference the garbage collector tracks, so storage lives
+exactly as long as anything can still reach it and is reclaimed like any other
+array. There is no lifetime to get wrong: no dispose-during-use, no double
+free, no leak from a forgotten `using`.
 
 ---
 
@@ -48,16 +51,33 @@ generic over `unmanaged, INumberBase<T>`, so `Matrix<float>` and
 `double`-only.
 
 ```csharp
-using var m = new Matrix<double>(rows: 100, columns: 40);
-using var z = Matrix.Zeros<double>(8, 8);
-using var i = Matrix.Identity<double>(8);
-using var f = Matrix.FromColumnMajor<double>(2, 2, [1, 2, 3, 4]);
+var m = new Matrix<double>(rows: 100, columns: 40);
+var z = Matrix.Zeros<double>(8, 8);
+var i = Matrix.Identity<double>(8);
+var f = Matrix.FromColumnMajor<double>(2, 2, [1, 2, 3, 4]);
 ```
 
 A **view** is a borrowed window. `MatrixView<T>` and `ReadOnlyMatrixView<T>` are
 `ref struct`s, so the compiler prevents them being stored in a field, boxed, or
 captured by an async method — the usual ways a borrowed pointer outlives its
 owner.
+
+There is no way to build a view from a raw pointer. A view comes either from a
+`Matrix<T>` or from **binding** a span to a `MatrixShape`, which checks that the
+span is long enough:
+
+```csharp
+var shape = new MatrixShape(rows: 3, columns: 4, stride: 5);   // validates, or throws
+double[] mine = new double[shape.RequiredExtent];              // (4-1)*5 + 3 = 18
+
+MatrixView<double> view = MatrixView<double>.Bind(mine, shape);   // zero-copy over your storage
+```
+
+`MatrixShape` is the one place shape arithmetic lives, computed in `long` with
+an explicit fit check — a shape whose extent would not fit an `int` cannot be
+constructed. If you genuinely have a `double*`, write `new Span<double>(p, len)`
+yourself: that is your `unsafe` block, correctly attributed, and it forces you to
+state the length, which is exactly the fact the library needs.
 
 ```csharp
 MatrixView<double> block = m.Slice(row: 10, column: 5, rows: 20, columns: 10);
@@ -89,10 +109,10 @@ confidently wrong answer. Here the shape is a type parameter, so the wrong
 choice does not compile and the right one is selected with no run-time branch.
 
 ```csharp
-using Matrix<double> u = BuildUpperTriangular();
+Matrix<double> u = BuildUpperTriangular();
 
 // Back substitution. No factorization, no branch, chosen at compile time.
-using Matrix<double> x = u.As<UpperTriangular>().Solve(b);
+Matrix<double> x = u.As<UpperTriangular>().Solve(b);
 ```
 
 Shipped structures:
@@ -111,7 +131,7 @@ say the rest is zero, and it cannot: LU packs `L` and `U` into one array, so the
 triangle a structure ignores routinely holds the other factor.
 
 ```csharp
-using LuDecomposition lu = a.FactorLu();
+LuDecomposition lu = a.FactorLu();
 
 lu.Lower.SolveInPlace(x.View);   // reads strictly below the diagonal
 lu.Upper.SolveInPlace(x.View);   // reads the diagonal and above
@@ -134,30 +154,29 @@ The safest structured matrices are the ones you never assert: `lu.Lower` and
 ## Factorizations
 
 ```csharp
-using LuDecomposition lu = a.FactorLu();     // a is not modified
+LuDecomposition lu = a.FactorLu();     // a is not modified
 
-using Matrix<double> x  = lu.Solve(b);
-using Matrix<double> xt = lu.SolveTransposed(b);
+Matrix<double> x  = lu.Solve(b);
+Matrix<double> xt = lu.SolveTransposed(b);
 
 bool broken   = lu.IsSingular;          // an exactly zero pivot
 double rcond  = lu.ReciprocalCondition();
 double det    = lu.Determinant();
 ```
 
-`FactorLu` copies, so your matrix survives. When the input is already scratch,
-factor in place instead and skip the copy:
+`FactorLu` copies, so your matrix survives, and the result keeps its own
+storage alive for as long as you hold it. When the copy matters —
+it is O(n²) against an O(n³) factorization, so it rarely does — factor in
+place through a workspace:
 
 ```csharp
-using Tensile;
-using Tensile.Primitives;
-
-// Any matrix you do not need intact afterwards; it is overwritten with the
-// packed factors, and must outlive the factorization that indexes into it.
-using Matrix<double> scratch = a.Clone();
-using var workspace = new Workspace();
-
-using LuFactorization factorization = workspace.FactorLu(scratch.View);
+LuDecomposition lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
 ```
+
+The decomposition then shares `a`'s storage, which is why this takes a
+`Matrix<double>` and not a view: the factors have to stay alive for as long as
+the decomposition does, and a garbage-collected object can promise that where a
+borrowed view cannot. Do not write to `a` while you are still using `lu`.
 
 Three things worth knowing:
 
@@ -227,23 +246,76 @@ rather than measured.
 
 ---
 
-## Dropping to the primitive layer
+## Matrix-free operators and norm estimation
+
+`ILinearOperator` is the extension point for anything that can be applied but
+should not be formed: a matrix power, an inverse, and later the operators
+`expm` probes. It takes and returns bound views, so an implementation receives
+the extents along with the data and cannot be handed a buffer shorter than its
+`Order` claims.
 
 ```csharp
-using Tensile.Primitives;
-
-using var dispatch = GemmDispatch.Multithreaded<Avx512Kernel16x8>();
-dispatch.Multiply<Avx512Kernel16x8>(m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
+public interface ILinearOperator
+{
+    int Order { get; }
+    void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);            // Y := A X
+    void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);   // Y := Aᵀ X
+}
 ```
 
-Here you choose the kernel, own the buffers, and get no argument checking. The
-micro-kernel is a struct implementing `IMicroKernel` with static abstract
-members, so the driver is monomorphised per kernel and every call is direct and
-inlinable rather than an interface dispatch.
+Two implementations ship. `DenseMatrixOperator(a, power)` applies `Aᵖ` by `p`
+successive panel products without forming the power; `LuInverseOperator(lu)`
+applies `A⁻¹` by solving. Both are what `NormEstimate` needs:
 
-`Reference.Multiply` is the naive triple loop, kept as a correctness oracle.
-Blocked GEMM sums the same products in a different order, so compare by residual
-and never by equality.
+```csharp
+double est   = NormEstimate.Of(new DenseMatrixOperator(a, power: 3)).Value;   // ≈ ‖A³‖₁
+double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator
+```
+
+`NormEstimate.Of` is Higham and Tisseur's block 1-norm estimator, the algorithm
+behind MATLAB's `normest1`. The result is always a **lower bound**, exact on
+most matrices and rarely off by more than a factor of two, and deterministic
+for a given seed. It never sees the operator's entries — only the products — so
+an operator that has no entries works as well as one that does.
+
+An implementation should check that `x.Rows` and `y.Rows` equal its order and
+that the two panels have the same width, and reject anything else as an
+argument. The estimator always satisfies both; another caller may not.
+
+---
+
+## Limits
+
+Every allocation the library makes on your behalf — storage, a result, a work
+panel — goes through one path that checks the request against a process-wide
+ceiling first:
+
+```csharp
+TensileLimits.MaxElements = 50_000_000;      // refuse anything over 50M elements per allocation
+
+try
+{
+    var big = new Matrix<double>(10_000, 10_000);   // 100M elements
+}
+catch (AllocationLimitException e)
+{
+    Console.WriteLine($"{e.Requested} > {e.Limit}: {e.Message}");
+}
+```
+
+The default is `Array.MaxLength`, the runtime's own ceiling, which is to say no
+policy at all — a library should not guess your memory budget. Set it once at
+startup if you are a service that would rather refuse a 16 GB request than
+attempt it. `AllocationLimitException` is thrown *before* any memory is asked
+for and is deliberately unrelated to `OutOfMemoryException`: one means the
+library declined, the other means the runtime tried and failed, and you will
+want to handle them differently.
+
+The limit counts elements, not bytes, applies per allocation rather than in
+total, and measures what you asked for — a `40×40` matrix is 1600 elements
+whatever its alignment padding, though a stride larger than the row count does
+count. Shape validity is checked before policy, so an impossible shape is an
+`ArgumentException` under any limit.
 
 ---
 

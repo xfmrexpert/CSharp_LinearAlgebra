@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Tensile.Fuzz</RootNamespace>
+
+    <!-- SharpFuzz instruments this assembly's dependencies in place and the
+         instrumented build must not be tiered or inlined across the seam it
+         measures. Debug-style settings on purpose; this is not a benchmark. -->
+    <Optimize>false</Optimize>
+    <TieredCompilation>false</TieredCompilation>
+    <TieredPGO>false</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MIT; passes the forkability test. Only the fuzz harness references it. -->
+    <PackageReference Include="SharpFuzz" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Tensile/Tensile.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Corpus/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

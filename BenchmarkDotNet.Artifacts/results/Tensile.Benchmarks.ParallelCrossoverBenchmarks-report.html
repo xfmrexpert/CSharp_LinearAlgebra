@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8' />
+<title>Tensile.Benchmarks.ParallelCrossoverBenchmarks-20260919-171630</title>
+
+<style type="text/css">
+	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
+	td, th { padding: 6px 13px; border: 1px solid #ddd; text-align: right; }
+	tr { background-color: #fff; border-top: 1px solid #ccc; }
+	tr:nth-child(even) { background: #f8f8f8; }
+</style>
+</head>
+<body>
+<pre><code>
+BenchmarkDotNet v0.15.8, Linux Ubuntu 24.04.4 LTS (Noble Numbat)
+Intel Xeon Processor 2.80GHz, 1 CPU, 4 logical and 4 physical cores
+.NET SDK 10.0.112
+  [Host] : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Dry    : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+</code></pre>
+<pre><code>Job=Dry  IterationCount=1  LaunchCount=1  
+RunStrategy=ColdStart  UnrollFactor=1  WarmupCount=1  
+</code></pre>
+
+<table>
+<thead><tr><th>Method</th><th>Shape</th><th>Mean</th><th>Error</th><th>Ratio</th>
+</tr>
+</thead><tbody><tr><td>Serial</td><td>1024x64</td><td>9.155 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>1024x64</td><td>19.133 ms</td><td>NA</td><td>2.09</td>
+</tr><tr><td>Serial</td><td>128</td><td>6.359 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>128</td><td>13.508 ms</td><td>NA</td><td>2.12</td>
+</tr><tr><td>Serial</td><td>160</td><td>9.143 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>160</td><td>13.875 ms</td><td>NA</td><td>1.52</td>
+</tr><tr><td>Serial</td><td>192</td><td>6.212 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>192</td><td>14.664 ms</td><td>NA</td><td>2.36</td>
+</tr><tr><td>Serial</td><td>2048x64</td><td>20.540 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>2048x64</td><td>25.852 ms</td><td>NA</td><td>1.26</td>
+</tr><tr><td>Serial</td><td>256</td><td>6.759 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>256</td><td>17.080 ms</td><td>NA</td><td>2.53</td>
+</tr><tr><td>Serial</td><td>256x64</td><td>5.769 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>256x64</td><td>13.473 ms</td><td>NA</td><td>2.34</td>
+</tr><tr><td>Serial</td><td>384</td><td>9.317 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>384</td><td>20.297 ms</td><td>NA</td><td>2.18</td>
+</tr><tr><td>Serial</td><td>512x64</td><td>6.609 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>512x64</td><td>17.252 ms</td><td>NA</td><td>2.61</td>
+</tr><tr><td>Serial</td><td>64</td><td>4.372 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>64</td><td>12.188 ms</td><td>NA</td><td>2.79</td>
+</tr><tr><td>Serial</td><td>96</td><td>5.083 ms</td><td>NA</td><td>1.00</td>
+</tr><tr><td>Threaded</td><td>96</td><td>12.907 ms</td><td>NA</td><td>2.54</td>
+</tr></tbody></table>
+</body>
+</html>

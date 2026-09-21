@@ -1,4 +1,4 @@
-using Tensile.Primitives;
+using Tensile.Kernels;
 
 namespace Tensile.Tests;
 
@@ -18,7 +18,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void ZerosStartsZeroed()
     {
-        using var a = Matrix.Zeros<double>(4, 3);
+        var a = Matrix.Zeros<double>(4, 3);
 
         Assert.Equal(4, a.Rows);
         Assert.Equal(3, a.Columns);
@@ -29,7 +29,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void IdentityHasUnitDiagonal()
     {
-        using var a = Matrix.Identity<double>(5);
+        var a = Matrix.Identity<double>(5);
 
         for (int j = 0; j < 5; j++)
             for (int i = 0; i < 5; i++)
@@ -40,7 +40,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void StorageIsGenericEvenWhereArithmeticIsNot()
     {
-        using var a = Matrix.Identity<float>(3);
+        var a = Matrix.Identity<float>(3);
 
         Assert.Equal(1.0f, a[2, 2]);
         Assert.Equal(0.0f, a[0, 1]);
@@ -49,7 +49,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void FromRowsReadsTheWayItIsWritten()
     {
-        using var a = Matrix.FromRows(new[,]
+        var a = Matrix.FromRows(new[,]
         {
             { 1.0, 2.0, 3.0 },
             { 4.0, 5.0, 6.0 },
@@ -69,7 +69,7 @@ public unsafe class MatrixApiTests
     {
         double[] values = [1, 2, 3, 4, 5, 6];
 
-        using var a = Matrix.FromColumnMajor<double>(3, 2, values);
+        var a = Matrix.FromColumnMajor<double>(3, 2, values);
 
         Assert.Equal(values, a.ToArray());
         Assert.Equal(4.0, a[0, 1]);
@@ -82,7 +82,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void ColumnsAreContiguousAndAliasTheMatrix()
     {
-        using var a = Matrix.Zeros<double>(4, 3);
+        var a = Matrix.Zeros<double>(4, 3);
 
         a.Column(1).Fill(7.0);
 
@@ -94,7 +94,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void SliceSharesStorage()
     {
-        using var a = Matrix.Zeros<double>(5, 5);
+        var a = Matrix.Zeros<double>(5, 5);
 
         MatrixView<double> block = a.Slice(1, 1, 2, 2);
         block.Fill(3.0);
@@ -109,7 +109,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void SliceOfAPaddedMatrixKeepsTheStride()
     {
-        using var a = new Matrix<double>(4, 4, stride: 9);
+        var a = new Matrix<double>(4, 4, stride: 9);
 
         MatrixView<double> block = a.Slice(1, 1, 2, 2);
 
@@ -123,7 +123,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void SliceRejectsABlockThatLeavesTheMatrix()
     {
-        using var a = Matrix.Zeros<double>(4, 4);
+        var a = Matrix.Zeros<double>(4, 4);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => a.Slice(2, 2, 3, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => a.Slice(-1, 0, 1, 1));
@@ -132,7 +132,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void IndexerRejectsOutOfRange()
     {
-        using var a = Matrix.Zeros<double>(2, 2);
+        var a = Matrix.Zeros<double>(2, 2);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => a[2, 0]);
         Assert.Throws<ArgumentOutOfRangeException>(() => a[0, -1]);
@@ -147,7 +147,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void SliceRejectsArgumentsThatOverflowTheBoundsCheck()
     {
-        using var a = Matrix.Zeros<double>(1, 4);
+        var a = Matrix.Zeros<double>(1, 4);
 
         Assert.Throws<ArgumentOutOfRangeException>(
             () => a.Slice(0, 2_000_000_000, 1, 2_000_000_000));
@@ -167,7 +167,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void CopyToIsSafeBetweenOverlappingWindows()
     {
-        using var a = Matrix.Zeros<double>(2, 4);
+        var a = Matrix.Zeros<double>(2, 4);
 
         for (int j = 0; j < 4; j++)
             for (int i = 0; i < 2; i++)
@@ -189,8 +189,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void OverlapDetectionSeparatesSharedFromDisjointWindows()
     {
-        using var a = Matrix.Zeros<double>(4, 4);
-        using var b = Matrix.Zeros<double>(4, 4);
+        var a = Matrix.Zeros<double>(4, 4);
+        var b = Matrix.Zeros<double>(4, 4);
 
         Assert.True(a.Slice(0, 0, 4, 2).Overlaps(a.Slice(0, 1, 4, 2)));
         Assert.False(a.Slice(0, 0, 4, 2).Overlaps(a.Slice(0, 2, 4, 2)));
@@ -200,25 +200,24 @@ public unsafe class MatrixApiTests
     [Fact]
     public void CloneIsIndependentAndPacked()
     {
-        using var a = new Matrix<double>(3, 2, stride: 7);
+        var a = new Matrix<double>(3, 2, stride: 7);
         a[0, 0] = 1.0;
 
-        using Matrix<double> copy = a.Clone();
+        Matrix<double> copy = a.Clone();
         copy[0, 0] = 2.0;
 
         Assert.Equal(1.0, a[0, 0]);
         Assert.Equal(3, copy.Stride);
     }
 
+    /// <summary>
+    /// There is no Dispose to race a view against: storage is a GC-tracked
+    /// pinned array, alive while any view of it is reachable. This pins that
+    /// the type did not quietly grow one back.
+    /// </summary>
     [Fact]
-    public void UseAfterDisposeThrows()
-    {
-        var a = Matrix.Zeros<double>(2, 2);
-        a.Dispose();
-
-        // A ref struct cannot be a lambda's return value, so touch a member of it.
-        Assert.Throws<ObjectDisposedException>(() => { _ = a.View.Rows; });
-    }
+    public void MatrixHasNoDisposeToOutlive() =>
+        Assert.False(typeof(IDisposable).IsAssignableFrom(typeof(Matrix<double>)));
 
     // ---- products ----------------------------------------------------------
 
@@ -230,15 +229,18 @@ public unsafe class MatrixApiTests
     [InlineData(100, 37, 129)]
     public void MultiplyMatchesTheReferenceImplementation(int m, int n, int k)
     {
-        using Matrix<double> a = RandomMatrix(m, k, seed: 1);
-        using Matrix<double> b = RandomMatrix(k, n, seed: 2);
+        Matrix<double> a = RandomMatrix(m, k, seed: 1);
+        Matrix<double> b = RandomMatrix(k, n, seed: 2);
 
-        using Matrix<double> product = a.Multiply(b);
-        using var expected = new Matrix<double>(m, n);
+        Matrix<double> product = a.Multiply(b);
+        var expected = new Matrix<double>(m, n);
 
-        Reference.Multiply(m, n, k, 1.0,
-            a.View.Pointer, a.Stride, b.View.Pointer, b.Stride,
-            0.0, expected.View.Pointer, expected.Stride);
+        fixed (double* pa = a.View.Buffer)
+        fixed (double* pb = b.View.Buffer)
+        fixed (double* pe = expected.View.Buffer)
+        {
+            Reference.Multiply(m, n, k, 1.0, pa, a.Stride, pb, b.Stride, 0.0, pe, expected.Stride);
+        }
 
         Assert.True(MaxDifference(product, expected) < Tolerance);
     }
@@ -246,8 +248,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void MultiplyRejectsNonConformableShapes()
     {
-        using Matrix<double> a = RandomMatrix(3, 4, seed: 3);
-        using Matrix<double> b = RandomMatrix(5, 2, seed: 4);
+        Matrix<double> a = RandomMatrix(3, 4, seed: 3);
+        Matrix<double> b = RandomMatrix(5, 2, seed: 4);
 
         Assert.Throws<ArgumentException>(() => a.Multiply(b));
     }
@@ -255,9 +257,9 @@ public unsafe class MatrixApiTests
     [Fact]
     public void MultiplyIntoAccumulatesWithBeta()
     {
-        using Matrix<double> a = Matrix.Identity<double>(4);
-        using Matrix<double> b = RandomMatrix(4, 4, seed: 5);
-        using Matrix<double> destination = b.Clone();
+        Matrix<double> a = Matrix.Identity<double>(4);
+        Matrix<double> b = RandomMatrix(4, 4, seed: 5);
+        Matrix<double> destination = b.Clone();
 
         // destination := 1*destination + 1*I*b  =>  2b
         a.MultiplyInto(b, destination.View, alpha: 1.0, beta: 1.0);
@@ -276,11 +278,11 @@ public unsafe class MatrixApiTests
     [InlineData(129)]
     public void SolveRecoversAKnownSolution(int n)
     {
-        using Matrix<double> a = RandomDiagonallyDominant(n, seed: 11);
-        using Matrix<double> expected = RandomMatrix(n, 2, seed: 12);
-        using Matrix<double> b = a.Multiply(expected);
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 11);
+        Matrix<double> expected = RandomMatrix(n, 2, seed: 12);
+        Matrix<double> b = a.Multiply(expected);
 
-        using Matrix<double> x = a.Solve(b);
+        Matrix<double> x = a.Solve(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -289,10 +291,10 @@ public unsafe class MatrixApiTests
     [Fact]
     public void FactorLuDoesNotModifyTheInput()
     {
-        using Matrix<double> a = RandomDiagonallyDominant(16, seed: 13);
-        using Matrix<double> before = a.Clone();
+        Matrix<double> a = RandomDiagonallyDominant(16, seed: 13);
+        Matrix<double> before = a.Clone();
 
-        using LuDecomposition lu = a.FactorLu();
+        LuDecomposition lu = a.FactorLu();
 
         Assert.Equal(0.0, MaxDifference(a, before));
     }
@@ -302,14 +304,14 @@ public unsafe class MatrixApiTests
     {
         const int n = 32;
 
-        using Matrix<double> a = RandomDiagonallyDominant(n, seed: 14);
-        using LuDecomposition lu = a.FactorLu();
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 14);
+        LuDecomposition lu = a.FactorLu();
 
         for (int trial = 0; trial < 3; trial++)
         {
-            using Matrix<double> expected = RandomMatrix(n, 1, seed: 100 + trial);
-            using Matrix<double> b = a.Multiply(expected);
-            using Matrix<double> x = lu.Solve(b);
+            Matrix<double> expected = RandomMatrix(n, 1, seed: 100 + trial);
+            Matrix<double> b = a.Multiply(expected);
+            Matrix<double> x = lu.Solve(b);
 
             Assert.True(MaxDifference(x, expected) < 1e-9);
         }
@@ -320,16 +322,16 @@ public unsafe class MatrixApiTests
     {
         const int n = 24;
 
-        using Matrix<double> a = RandomDiagonallyDominant(n, seed: 15);
-        using LuDecomposition lu = a.FactorLu();
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 15);
+        LuDecomposition lu = a.FactorLu();
 
-        using Matrix<double> expected = RandomMatrix(n, 2, seed: 16);
+        Matrix<double> expected = RandomMatrix(n, 2, seed: 16);
 
         // b := A^T * expected, built by multiplying with an explicit transpose.
-        using Matrix<double> transpose = Transpose(a);
-        using Matrix<double> b = transpose.Multiply(expected);
+        Matrix<double> transpose = Transpose(a);
+        Matrix<double> b = transpose.Multiply(expected);
 
-        using Matrix<double> x = lu.SolveTransposed(b);
+        Matrix<double> x = lu.SolveTransposed(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -337,8 +339,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void SolveRejectsANonSquareMatrix()
     {
-        using Matrix<double> a = RandomMatrix(4, 3, seed: 17);
-        using Matrix<double> b = RandomMatrix(4, 1, seed: 18);
+        Matrix<double> a = RandomMatrix(4, 3, seed: 17);
+        Matrix<double> b = RandomMatrix(4, 1, seed: 18);
 
         Assert.Throws<ArgumentException>(() => a.Solve(b));
     }
@@ -347,8 +349,8 @@ public unsafe class MatrixApiTests
     public void DeterminantMatchesAHandComputation()
     {
         // [[1,2],[3,4]] has determinant -2.
-        using var a = Matrix.FromRows(new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } });
-        using LuDecomposition lu = a.FactorLu();
+        var a = Matrix.FromRows(new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } });
+        LuDecomposition lu = a.FactorLu();
 
         Assert.Equal(-2.0, lu.Determinant(), 12);
     }
@@ -356,8 +358,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void DeterminantOfIdentityIsOne()
     {
-        using Matrix<double> a = Matrix.Identity<double>(9);
-        using LuDecomposition lu = a.FactorLu();
+        Matrix<double> a = Matrix.Identity<double>(9);
+        LuDecomposition lu = a.FactorLu();
 
         Assert.Equal(1.0, lu.Determinant(), 12);
     }
@@ -365,8 +367,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void ReciprocalConditionIsOneForTheIdentity()
     {
-        using Matrix<double> a = Matrix.Identity<double>(32);
-        using LuDecomposition lu = a.FactorLu();
+        Matrix<double> a = Matrix.Identity<double>(32);
+        LuDecomposition lu = a.FactorLu();
 
         Assert.Equal(1.0, lu.ReciprocalCondition(), 12);
     }
@@ -383,18 +385,46 @@ public unsafe class MatrixApiTests
 
         foreach (int n in new[] { 4, 6, 8, 10 })
         {
-            using var a = new Matrix<double>(n, n);
+            var a = new Matrix<double>(n, n);
             for (int j = 0; j < n; j++)
                 for (int i = 0; i < n; i++)
                     a[i, j] = 1.0 / (i + j + 1);
 
-            using LuDecomposition lu = a.FactorLu();
+            LuDecomposition lu = a.FactorLu();
             double rcond = lu.ReciprocalCondition();
 
             Assert.True(rcond < previous, $"rcond at n={n} was {rcond:E3}, not below {previous:E3}");
             previous = rcond;
         }
     }
+
+    /// <summary>
+    /// The zero-copy path: factoring through a workspace overwrites the
+    /// operand, the decomposition shares its storage, and it solves exactly as
+    /// the copying path does.
+    /// </summary>
+    [Fact]
+    public void WorkspaceFactorsInPlaceAndSharesStorage()
+    {
+        const int n = 24;
+
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 31);
+        Matrix<double> b = RandomMatrix(n, 2, seed: 32);
+        Matrix<double> expected = a.FactorLu().Solve(b);
+
+        Matrix<double> original = a.Clone();
+        LuDecomposition lu = Workspace.Shared.FactorLu(a);
+
+        // a now holds the packed factors, not the original.
+        Assert.True(MaxDifference(a, original) > 1e-3);
+        Assert.Equal(lu.Upper.View[0, 0], a[0, 0]);
+
+        Assert.True(MaxDifference(lu.Solve(b), expected) < Tolerance);
+    }
+
+    [Fact]
+    public void WorkspaceFactorLuRejectsNull() =>
+        Assert.Throws<ArgumentNullException>(() => Workspace.Shared.FactorLu(null!));
 
     // ---- structure-typed dispatch -----------------------------------------
 
@@ -408,18 +438,18 @@ public unsafe class MatrixApiTests
     {
         const int n = 40;
 
-        using Matrix<double> a = RandomDiagonallyDominant(n, seed: 21);
-        using Matrix<double> b = RandomMatrix(n, 2, seed: 22);
+        Matrix<double> a = RandomDiagonallyDominant(n, seed: 21);
+        Matrix<double> b = RandomMatrix(n, 2, seed: 22);
 
-        using LuDecomposition lu = a.FactorLu();
-        using Matrix<double> expected = lu.Solve(b);
+        LuDecomposition lu = a.FactorLu();
+        Matrix<double> expected = lu.Solve(b);
 
         // P*b, then forward substitution through L, then back substitution
         // through U -- each dispatched by its structure type.
-        using Matrix<double> x = b.Clone();
-        fixed (int* pivots = lu.Pivots.ToArray())
+        Matrix<double> x = b.Clone();
+        fixed (double* px = x.View.Buffer)
         {
-            Lu.SwapRows(x.View.Pointer, x.Stride, 0, x.Columns, pivots, 0, n);
+            Lu.SwapRows(px, x.Stride, 0, x.Columns, lu.Pivots, 0, n);
         }
 
         lu.Lower.SolveInPlace(x.View);
@@ -433,11 +463,11 @@ public unsafe class MatrixApiTests
     {
         const int n = 20;
 
-        using Matrix<double> u = UpperTriangularMatrix(n, seed: 23);
-        using Matrix<double> expected = RandomMatrix(n, 3, seed: 24);
-        using Matrix<double> b = u.Multiply(expected);
+        Matrix<double> u = UpperTriangularMatrix(n, seed: 23);
+        Matrix<double> expected = RandomMatrix(n, 3, seed: 24);
+        Matrix<double> b = u.Multiply(expected);
 
-        using Matrix<double> x = u.As<UpperTriangular>().Solve(b);
+        Matrix<double> x = u.As<UpperTriangular>().Solve(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -447,11 +477,11 @@ public unsafe class MatrixApiTests
     {
         const int n = 20;
 
-        using Matrix<double> l = LowerTriangularMatrix(n, seed: 25);
-        using Matrix<double> expected = RandomMatrix(n, 3, seed: 26);
-        using Matrix<double> b = l.Multiply(expected);
+        Matrix<double> l = LowerTriangularMatrix(n, seed: 25);
+        Matrix<double> expected = RandomMatrix(n, 3, seed: 26);
+        Matrix<double> b = l.Multiply(expected);
 
-        using Matrix<double> x = l.As<LowerTriangular>().Solve(b);
+        Matrix<double> x = l.As<LowerTriangular>().Solve(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -461,13 +491,13 @@ public unsafe class MatrixApiTests
     {
         const int n = 18;
 
-        using Matrix<double> u = UpperTriangularMatrix(n, seed: 27);
-        using Matrix<double> expected = RandomMatrix(n, 2, seed: 28);
+        Matrix<double> u = UpperTriangularMatrix(n, seed: 27);
+        Matrix<double> expected = RandomMatrix(n, 2, seed: 28);
 
-        using Matrix<double> transpose = Transpose(u);
-        using Matrix<double> b = transpose.Multiply(expected);
+        Matrix<double> transpose = Transpose(u);
+        Matrix<double> b = transpose.Multiply(expected);
 
-        using Matrix<double> x = u.As<UpperTriangular>().SolveTransposed(b);
+        Matrix<double> x = u.As<UpperTriangular>().SolveTransposed(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -479,8 +509,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void PackedFactorsDoNotClaimTheirOtherTriangleIsZero()
     {
-        using Matrix<double> a = RandomDiagonallyDominant(12, seed: 29);
-        using LuDecomposition lu = a.FactorLu();
+        Matrix<double> a = RandomDiagonallyDominant(12, seed: 29);
+        LuDecomposition lu = a.FactorLu();
 
         Assert.False(UpperTriangular.UnreferencedPartIsZero(lu.Upper.View));
         Assert.False(UnitLowerTriangular.UnreferencedPartIsZero(lu.Lower.View));
@@ -492,8 +522,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void AsCheckedAcceptsAGenuineTriangleAndRejectsADenseOne()
     {
-        using Matrix<double> upper = UpperTriangularMatrix(6, seed: 30);
-        using Matrix<double> dense = RandomMatrix(6, 6, seed: 31);
+        Matrix<double> upper = UpperTriangularMatrix(6, seed: 30);
+        Matrix<double> dense = RandomMatrix(6, 6, seed: 31);
 
         StructuredMatrix<double, UpperTriangular> accepted = upper.AsChecked<UpperTriangular>();
         Assert.Equal(6, accepted.Rows);
@@ -504,8 +534,8 @@ public unsafe class MatrixApiTests
     [Fact]
     public void TriangularSolveRejectsANonSquareOperand()
     {
-        using Matrix<double> a = RandomMatrix(4, 3, seed: 32);
-        using Matrix<double> b = RandomMatrix(4, 1, seed: 33);
+        Matrix<double> a = RandomMatrix(4, 3, seed: 32);
+        Matrix<double> b = RandomMatrix(4, 1, seed: 33);
 
         Assert.Throws<ArgumentException>(() => a.As<UpperTriangular>().Solve(b));
     }
@@ -515,7 +545,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void NormsMatchHandComputations()
     {
-        using var a = Matrix.FromRows(new[,]
+        var a = Matrix.FromRows(new[,]
         {
             { 1.0, -2.0 },
             { -3.0, 4.0 },
@@ -531,7 +561,7 @@ public unsafe class MatrixApiTests
     {
         for (int n = 4; n <= 48; n += 11)
         {
-            using Matrix<double> a = RandomMatrix(n, n, seed: n);
+            Matrix<double> a = RandomMatrix(n, n, seed: n);
 
             double exact = a.OneNorm();
             double estimate = a.EstimateOneNorm();
@@ -543,7 +573,7 @@ public unsafe class MatrixApiTests
     [Fact]
     public void EstimateOneNormRejectsANonSquareMatrix()
     {
-        using Matrix<double> a = RandomMatrix(4, 3, seed: 34);
+        Matrix<double> a = RandomMatrix(4, 3, seed: 34);
 
         Assert.Throws<ArgumentException>(() => a.EstimateOneNorm());
     }
@@ -553,13 +583,13 @@ public unsafe class MatrixApiTests
     [Fact]
     public void AnExplicitWorkspaceAgreesWithTheSharedOne()
     {
-        using Matrix<double> a = RandomMatrix(48, 48, seed: 41);
-        using Matrix<double> b = RandomMatrix(48, 48, seed: 42);
+        Matrix<double> a = RandomMatrix(48, 48, seed: 41);
+        Matrix<double> b = RandomMatrix(48, 48, seed: 42);
 
         using var workspace = new Workspace(multithreaded: false);
 
-        using Matrix<double> viaShared = a.Multiply(b);
-        using Matrix<double> viaOwn = a.Multiply(b, workspace);
+        Matrix<double> viaShared = a.Multiply(b);
+        Matrix<double> viaOwn = a.Multiply(b, workspace);
 
         Assert.True(MaxDifference(viaShared, viaOwn) < Tolerance);
         Assert.False(workspace.IsMultithreaded);
@@ -572,8 +602,8 @@ public unsafe class MatrixApiTests
         var workspace = new Workspace();
         workspace.Dispose();
 
-        using Matrix<double> a = Matrix.Identity<double>(2);
-        using Matrix<double> b = Matrix.Identity<double>(2);
+        Matrix<double> a = Matrix.Identity<double>(2);
+        Matrix<double> b = Matrix.Identity<double>(2);
 
         Assert.Throws<ObjectDisposedException>(() => a.Multiply(b, workspace));
     }

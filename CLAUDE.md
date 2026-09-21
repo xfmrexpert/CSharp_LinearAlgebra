@@ -256,80 +256,93 @@ Swept on the 12700H, pinned, 31 iterations, run twice — ascending and
 descending (`TENSILE_BENCH_REVERSE=1`) — because a one-directional sweep
 cannot tell a block size from a cooler. GFLOP/s from medians.
 
-MC=144 against the old placeholder MC=288, best KC for each:
+MC=144 against the old placeholder MC=288, best KC for each. **This table is
+superseded by the re-run below — the n=2048 figure did not reproduce — and is
+kept because what it got wrong is the lesson:**
 
-| n | ascending | descending | verdict |
+| n | ascending | descending | verdict at the time |
 | --- | --- | --- | --- |
 | 128 | MC144 +13.8% | MC144 -0.7% | sign flips: thermal |
 | 512 | MC144 +12.3% | MC144 -1.5% | sign flips: thermal |
-| 2048 | MC144 +9.6% | MC144 **+9.5%** | **survives: real** |
-
-**Only n=2048 survives reversal, and it survives to a tenth of a percent.**
-MC=144 is now the serial default, matching what `ParallelGemm` already
-derived from cache geometry. KC=256 and KC=384 came out within 1% of each
-other everywhere in both directions, so KC stays at 384 — there is nothing to
-choose between them, and moving it would be unmeasured churn.
+| 2048 | MC144 +9.6% | MC144 +9.5% | ~~survives: real~~ **did not reproduce** |
 
 The ascending-only run would have reported "MC=144 is 10-14% better at every
-size". Two of those three numbers were the machine warming up. This is the
-first time the reverse-order test of finding 7 has actually been run, and it
-overturned two results out of three.
+size". Two of those three numbers were the machine warming up, which is what
+the reversal was for and what it caught. The third agreed to a tenth of a
+percent in both directions and was recorded as settled; re-run in a fresh
+sitting it measures roughly zero. Two directions run back to back rule out
+the thermal gradient and nothing else — see finding 7.
 
-### Re-run 2026-09-21, both arms in one class: the driver/dispatch gap is not real
+MC=144 is the serial default, matching what `ParallelGemm` already derived
+from cache geometry, and the re-run below supports keeping it on a different
+and smaller effect. KC=256 and KC=384 came out within 1% of each other
+everywhere in both directions, so KC stays at 384 and is no longer swept.
+
+### Re-run 2026-09-21, both arms in one class, both directions
 
 `BlockSizeBenchmarks` had an unexplained quarrel with `GemmBenchmarks`: the
 same MC=288/KC=384 configuration ran 8-18% slower there, in every attempt,
 including the clean high-priority one. Tiering was ruled out. It was written
 off as thermal, and then the MC question came to rest on it, because the sweep
 drives `Gemm.Multiply` with an explicit scratch while `GemmBenchmarks` goes
-through `GemmDispatch`.
+through `GemmDispatch`. So the class was given a dispatch arm and run both
+ways. KC is fixed at 384, since 256 was within 1% of it everywhere. Pinned;
+ascending on BDN's default job, descending at 31 iterations.
 
-The class now runs both arms at each MC, in one process. KC is fixed at 384,
-since 256 was within 1% of it everywhere in both directions. Pinned, ascending,
-BDN's default job; StdDev 2.1-6.5%.
+**The dispatch costs nothing, in both directions.** Twelve driver/dispatch
+pairs, dispatch/driver from 0.966 to 1.021 — sign flipping, every one inside
+its own row's StdDev, and the descending run's six all land in 0.977-1.009.
+The 8-18% gap was drift between two processes, not a cost in the path every
+caller takes, which is what `ApiOverheadBenchmarks` had already implied and
+what the arithmetic says (O(1) checks against O(n^3) of work). Corroborating
+it from the other side, this class's dispatch row at MC=144/n=2048 reads 44.48
+against `GemmBenchmarks`'s 45.49 in the pinned sitting — two classes, two
+sittings, 2.2% apart, where 09-19 had them 8-18% apart. See finding 12.
 
-| MC | n | driver | dispatch | dispatch/driver |
+**MC=144 wins, but by a few percent and not nine.** Positive means MC=144
+faster; means, with medians in the 09-19-style summary below.
+
+| n | arm | ascending | descending | mean of the two |
 | --- | --- | --- | --- | --- |
-| 144 | 128 | 39.72 | 39.61 | 1.003 |
-| 144 | 512 | 44.89 | 46.47 | 0.966 |
-| 144 | 2048 | 45.43 | 44.48 | 1.021 |
-| 288 | 128 | 39.24 | 39.83 | 0.985 |
-| 288 | 512 | 42.81 | 43.43 | 0.986 |
-| 288 | 2048 | 44.84 | 45.23 | 0.991 |
+| 128 | driver | +1.2% | +0.5% | +0.9% |
+| 128 | dispatch | -0.6% | +0.1% | -0.2% |
+| 512 | driver | +4.9% | +3.0% | **+3.9%** |
+| 512 | dispatch | +7.0% | +1.8% | **+4.4%** |
+| 2048 | driver | +1.3% | +2.8% | +2.1% |
+| 2048 | dispatch | -1.7% | +2.0% | +0.2% |
 
-**The dispatch costs nothing.** Six pairs, ratios 0.966 to 1.021, sign
-flipping, every one inside its own row's StdDev. The 8-18% gap was drift
-between two processes, not a cost in the path every caller takes — which is
-what `ApiOverheadBenchmarks` had already implied and what the arithmetic says
-(O(1) checks against O(n^3) of work). Corroborating it from the other side,
-this class's dispatch row at MC=144/n=2048 reads 44.48 against
-`GemmBenchmarks`'s 45.49 in the pinned sitting — two classes, two sittings,
-2.2% apart, where 09-19 had them 8-18% apart.
+**The descending run is the one that carries this**, because BDN sorts by
+parameter value and the reversal therefore runs MC=288 first and coolest:
+MC=144 wins all six descending cells while running last and hottest, which is
+the strong form of the test (the same argument that makes LU's nb=32 result
+solid). Eleven of the twelve cells are positive.
 
-**And the MC verdict does not reproduce.** MC=144 against MC=288, positive
-meaning MC=144 faster:
+But the magnitude is small and size-dependent. **n=512 is the only size with a
+real effect**, ~4% averaged and positive on both arms in both directions.
+n=128 is nothing. **n=2048 is a wash** — +2.1% and +0.2% averaged, against
+5-6.5% StdDev, which is the size where this machine is noisiest.
 
-| n | driver, mean | driver, median | dispatch, mean | dispatch, median | 09-19 ascending |
-| --- | --- | --- | --- | --- | --- |
-| 128 | +1.2% | +1.6% | -0.6% | -0.4% | +13.8% |
-| 512 | +4.9% | +7.0% | **+7.0%** | **+8.1%** | +12.3% |
-| 2048 | +1.3% | +0.5% | -1.7% | -1.5% | +9.6% |
+**So the 9.5% at n=2048 recorded above does not reproduce.** That figure came
+from a pair of runs whose two directions agreed to a tenth of a percent, and
+it is now measured at roughly zero by a fresh pair that also agree with each
+other. Bidirectional agreement inside one sitting rules out the thermal
+gradient; it does not make an effect reproducible across sittings. See
+finding 7.
 
-**The n=2048 result that survived reversal at 9.5% is now a wash**, at a size
-where StdDev is 5-6.5%. n=512 is the only size with a real signal this time,
-4.9-8.1% depending on arm and statistic — and n=512 is precisely the size
-whose 09-19 result flipped sign under reversal, and this is an ascending run,
-in which BDN puts MC=144 first and coolest. It means nothing without the
-descending run.
+**MC=144 stays, now on evidence rather than on a number that evaporated**: no
+worse than MC=288 at any size in either direction, ~4% better at n=512, and it
+is also what `ParallelGemm` derives from cache geometry, so the two paths
+agree. What is still unknown is whether some third value beats both — MC has
+only ever been measured at two values and three sizes, and NC has never been
+varied at all.
 
-Note also that MC=288 at n=2048 reads 44.84 here against `GemmBenchmarks`'s
-57.22 on 09-19 — the identical configuration, 21.6% down. The sitting moved
-again, by far more than the effect being measured.
-
-So: **MC is unsettled, the descending run is the next thing to take**, and both
-directions should carry `--iterationCount 31` and run as root, because every
-candidate effect left is in single-digit percent and BDN's default job does not
-resolve that on this machine.
+Absolute figures, for the record and not for comparison: 40.2-41.2 GFLOP/s at
+n=128, 43.4-45.1 at n=512, 44.7-46.0 at n=2048. MC=288 at n=2048 reads 44.7
+here against `GemmBenchmarks`'s 57.22 on 09-19 — identical configuration, 22%
+down. The sitting moved again, by far more than anything being measured
+inside it. Note also that going from the default job to 31 iterations barely
+touched dispersion at n=2048 (6.2-6.5% to 5.1-6.6%), so the sample count is
+not what limits that size; the machine is.
 
 ## What the secure-by-design migration cost: nothing measurable
 
@@ -653,6 +666,17 @@ well- and ill-conditioned inputs.
    between directions was 1.3-12.3% here, which is the thermal gradient's
    size on this part.
 
+   **And the limit of the test, which cost a conclusion to learn: agreeing in
+   both directions is not the same as reproducing.** The block-size sweep's
+   MC=144 win at n=2048 read +9.6% ascending and +9.5% descending — a tenth of
+   a percent apart, which is as convincing as a bidirectional result ever
+   looks, and it was recorded as settled. Re-run months later it measures
+   +2.8% and -1.7%, essentially zero, with the two new directions agreeing
+   with *each other*. Two directions run back to back share everything except
+   the thermal gradient, so their agreement rules out the gradient and nothing
+   else. A result is reproducible when a *different sitting* finds it, and on
+   this machine a different sitting is worth up to 22%.
+
 8. **A heuristic estimator needs invariant tests, not accuracy tests.**
    `normest1` returns a lower bound, so underestimating is correct behaviour
    and "wrong answer" and "unlucky answer" are indistinguishable from a single
@@ -766,18 +790,17 @@ well- and ill-conditioned inputs.
 
 # Open items
 
-- **`Gemm.cs`'s serial MC is unsettled.** It was closed on a bidirectional
-  sweep that put MC=144 ahead by 9.5% at n=2048. The 2026-09-21 re-run of that
-  same sweep, in one class and with both arms, **does not reproduce it**: n=2048
-  reads +1.3% / -1.7% depending on arm, a wash against 5-6.5% StdDev. The only
-  signal left is n=512 at +4.9% to +8.1% — and that is the size whose 09-19
-  result flipped sign under reversal, in an ascending run where MC=144 goes
-  first and coolest. **The descending run is the next thing to take**, with
-  `--iterationCount 31` and as root. MC=144 stays shipped meanwhile; nothing
-  measured is against it, there is simply no longer a measurement for it
-  either. KC is settled at 384 (256 within 1% everywhere, both directions) and
-  is no longer swept. NC=4096 has still never been varied, and MC has been
-  measured at only three sizes.
+- ~~**`Gemm.cs` uses placeholder MC=288, KC=384.**~~ *Closed, on the second
+  attempt and with a much smaller number than the first.* The 09-19 sweep's
+  headline — MC=144 ahead 9.5% at n=2048, agreeing in both directions — did
+  not reproduce; the 09-21 re-run, both arms and both directions at 31
+  iterations, measures that size as a wash. What survives is a consistent
+  small win: eleven of twelve cells positive, all six positive in the
+  descending run where MC=144 runs last and hottest, ~4% at n=512 and ~0-2%
+  elsewhere. MC=144 stays. KC is settled at 384. **What is still open is
+  narrower than before**: MC has been measured at exactly two values and three
+  sizes, NC=4096 has never been varied at all, and a size-dependent MC has
+  never been tried.
 - ~~**Small-n threading.**~~ *Mostly closed.* The dispatch now keeps
   everything below 2^24 of work on the serial path, which is measured correct
   at every size tested from n=64 to n=192 (serial ahead 7-17%). n=128 in

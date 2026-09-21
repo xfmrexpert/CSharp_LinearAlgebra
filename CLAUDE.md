@@ -161,7 +161,51 @@ amortise better, or a small-matrix special path on its side. That is where to
 look next, and nothing measured so far bears on it.
 
 Note this table was taken with the old MC=288; the serial default is now
-MC=144, so it needs a quick re-run to stay current.
+MC=144, so it needs a quick re-run to stay current. **That re-run has been
+attempted and did not land** — see immediately below.
+
+### The 2026-09-21 re-run was unpinned, so it does not replace the table
+
+Both classes were re-run on the 12700H with MC=144 in place. The run was not
+pinned, so it cannot answer the MC question: the environment and the parameter
+changed together.
+
+The tell is inside the run itself. Its threaded rows read 0.64 / 0.38 / 0.36 /
+0.34 of serial at n=256 and up — a 2.6-3x speedup — and `taskset -c 0` makes
+`ProcessorCount` 1, which makes that arithmetically impossible. The previous
+pinned run's threaded rows sat 1-3% *slower* than serial, which is what
+fork/join against a single worker looks like. A 3x speedup is a machine with
+cores on it.
+
+| n | C# 1 thread | BLIS 1-thread | ratio, means | ratio, medians | C# vs pinned | BLIS vs pinned |
+| --- | --- | --- | --- | --- | --- | --- |
+| 128 | 38.69 | 48.32 | 80% | 72% | -21.9% | -17.3% |
+| 256 | 44.30 | 46.68 | 95% | 95% | -18.4% | -16.4% |
+| 512 | 49.02 | 46.49 | 105% | 105% | -12.9% | -19.5% |
+| 1024 | 46.38 | 43.94 | 106% | 105% | -19.0% | -21.3% |
+| 2048 | 45.93 | 44.10 | 104% | 98% | -19.7% | -23.2% |
+
+(GFLOP/s from means, since dispersion here is 4-11% StdDev against the pinned
+run's 1.2-2.0% and the medians are correspondingly unsteady — at n=128 the C#
+median is *above* its mean.)
+
+**Both sides are down 13-23%, which is the environment and not MC=144.** Three
+things say so. The drop is on both sides, and BLIS did not change at all
+between the runs. It has no size dependence worth speaking of, where a
+cache-blocking parameter would. And the same run's threaded row at n=2048
+reads 137.9 GFLOP/s, right where every other unpinned threaded measurement of
+this machine has put it (ApiOverhead 136.8, thread sweep 147.0) — so the
+machine was not slow, the *serial rows* were.
+
+**What the run does establish is that the parity shape survives a different
+environment.** Behind at n=128 (80%, against 85% pinned), parity at n=256, and
+level or fractionally ahead from 512 up. Read the 104-106% as parity, not as a
+lead: 5% is well inside 10% dispersion. That the one clear deficit lands at
+n=128 in both campaigns, taken months and environments apart, is the most
+useful thing here — it is the finding that has now replicated.
+
+To actually re-take the table: `taskset -c 0`, root for priority, both classes
+in the same sitting.
 
 Note BLIS has no Alder Lake sub-configuration and falls back to its `haswell`
 config, whose double micro-kernel is 6x8 AVX2 assembly — the same geometry and
@@ -482,8 +526,17 @@ well- and ill-conditioned inputs.
    `taskset -c 0` makes a thread-count sweep degenerate. Pin for single-thread
    comparisons; do not pin for scaling sweeps.
 
-   The corollary bites on a hybrid part: **the 1-thread row of an unpinned
-   sweep is worthless as a baseline.** A `Parallel.For` limited to one worker
+   The corollary bites on a hybrid part: **any single-threaded row of an
+   unpinned run is worthless as a baseline** — and this is not specific to
+   `Parallel.For`, which was how it was first found. The serial GEMM path,
+   which forks nothing at all, measured 12.9-21.9% below its pinned figure in
+   the unpinned 2026-09-21 re-run, with dispersion going from 1.2-2.0% StdDev
+   to 4-11%. In that same run the *threaded* row at n=2048 was unaffected
+   (137.9 GFLOP/s, in line with every other unpinned measurement), which is
+   the shape to recognise: a run where the parallel rows look normal and the
+   serial rows look 20% slow is an unpinned run, not a regression.
+
+   A `Parallel.For` limited to one worker
    still goes wherever the scheduler puts it, and on a 12700H that includes
    the E-cores. Measured, the unpinned 1-thread row read 44.32 GFLOP/s against
    57.22 pinned to a P-core — understating the baseline by 29% and inflating

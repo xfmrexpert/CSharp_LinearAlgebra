@@ -372,11 +372,71 @@ squaring step — on the order of 15 to 25 products of order n.
 
 ---
 
+## The action of the exponential
+
+`Expmv` computes exp(tA)B without ever forming exp(tA). For a transient sweep
+this is the operation you want: the cost is a few dozen applications of A to a
+panel, and when B is a single vector each of those is O(n²) rather than the
+O(n³) of a matrix product.
+
+```csharp
+var y = a.Expmv(b.ReadOnlyView);              // exp(A) B
+var y = a.Expmv(b.ReadOnlyView, t: 2.5);      // exp(2.5 A) B, t may be negative or zero
+```
+
+Al-Mohy and Higham (2011). The truncation degree m and the scaling s are chosen
+together to minimise m·s — the number of applications — subject to a backward
+error bound, and the inner loop stops early once the remaining terms cannot
+change the result at working precision, so m is a cap rather than a count.
+
+### How much it saves, and when it stops saving
+
+Counted rather than timed, so these numbers are machine independent;
+`tensile-diag` prints the table. Ratio is expm flops over expmv flops, with B
+a single column unless stated:
+
+| n | ‖A‖₁ | n₀ | applications | flop ratio vs `Expm` |
+| --- | --- | --- | --- | --- |
+| 64 | 1 | 1 | 12 | 34× |
+| 256 | 1 | 1 | 10 | 163× |
+| 1000 | 10 | 1 | 26 | 283× |
+| 1000 | 100 | 1 | 30 | 378× |
+| 256 | 10 | 8 | 17 | 13.9× |
+| 256 | 10 | 64 | 17 | **1.8×** |
+
+**The advantage is roughly n/n₀, so it is large exactly when B is narrow and
+it disappears when B is wide.** At n=256 it falls from 163× at one column to
+1.8× at sixty-four. If you need exp(A) applied to many columns, form the
+exponential once with `Expm` and multiply — that is what the last row is
+telling you.
+
+Two caveats on reading the ratio. It is **flops, not time**: `Expm` spends its
+flops in GEMM, which runs near the machine's peak, while `Expmv` spends them in
+unpacked panel products, which are memory-bound and run at a fraction of it, so
+the wall-clock advantage is smaller. And no benchmark has been taken — that
+needs the verification machine.
+
+### Matrix-free operators
+
+The overload that matters for a real FEM or MTL model takes an operator rather
+than a matrix, and uses **only** `Apply` — no transpose, no entries, no trace:
+
+```csharp
+var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
+```
+
+This is why `ILinearOperator` does not require a transpose. The price is the
+parameter choice: without products by Aᵀ the ‖A^p‖^(1/p) quantities cannot be
+estimated, so the scaling falls back to the bound you supply. Since
+‖A^p‖^(1/p) ≤ ‖A‖, that is always safe — it can only pick a larger s than
+necessary, never a smaller one — but for a strongly nonnormal operator it can
+be a lot more work than the dense path would do. Supply the tightest bound you
+have.
+
+---
+
 ## Not here yet
 
-- **`expmv`**, which computes exp(At)b without forming the exponential — a few
-  dozen matrix-vector products instead of ~20 matrix-matrix ones. It is the
-  next thing to land, and it will take `ILinearOperator` rather than a matrix.
 - **Complex**, which the transformer-winding application ultimately needs.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.

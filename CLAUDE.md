@@ -61,7 +61,7 @@ exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential` |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
@@ -81,6 +81,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/LinearOperators.cs` | `ILinearOperator` / `ITransposableOperator` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
+| `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
@@ -92,9 +93,9 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 965 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1007 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
-| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle; and the codegen gate's process |
+| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
 
@@ -781,6 +782,31 @@ well- and ill-conditioned inputs.
     at `||A||/2^s <= 1/32` is one: obviously correct, far too slow to ship, and
     sharing nothing with the Padé path but GEMM.
 
+14. **Python's integers are arbitrary precision and C#'s are not, and a
+    transliterated numerical algorithm will hit that in its search, not in its
+    arithmetic.** `expmv` picks its parameters by sweeping a table of degrees
+    and taking the one minimising `m * ceil(norm / theta_m)`. The smallest
+    tabulated theta is 2.29e-16, so that expression is about 4e15 times the
+    norm — for *any* input, including a tiny one. In Python this is a big
+    integer that simply loses the minimisation and is discarded; the reference
+    implementation never notices. In C# the cast traps, and every single
+    accuracy test failed at once with an `OverflowException` from inside the
+    parameter search.
+
+    Two things are worth keeping from it. First, the degree that overflowed is
+    one that never wins — the arithmetic still has to be able to *evaluate* a
+    candidate's cost in order to reject it, so "it can't be selected" is not a
+    reason it can't break you. The search now runs in `double` throughout and
+    narrows to an `int` once, after the winner is known. Second,
+    `CheckForOverflowUnderflow` is why this was a stack trace pointing at the
+    exact line rather than a silently negative scaling that would have quietly
+    returned B unchanged. The setting earned its keep here.
+
+    The general form: when porting from a dynamically-typed reference, the
+    danger is not the formula — that transcribes fine — it is every place the
+    reference relies on a numeric type that does not overflow, saturate, or
+    round the way yours does.
+
 ---
 
 # Design decisions and why
@@ -900,8 +926,19 @@ well- and ill-conditioned inputs.
   LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
   which is strong evidence but not the same thing.
 - **The estimator's `PanelProduct` applications are O(n^2 t) with no
-  blocking.** Fine at the sizes that matter for `dgecon`, possibly not for
-  `expm`'s inner loop.
+  blocking.** Fine at the sizes that matter for `dgecon`, and now load-bearing
+  for `expmv`, whose whole inner loop is this path. It is the right primitive
+  for a narrow B — packing cannot amortise over one column — and the wrong one
+  for a wide B, where GEMM would win. The crossover is unmeasured, which is
+  why `Expmv` takes no `Workspace`: there is nothing for it to configure on
+  the panel path, and taking one would imply otherwise.
+- **`expmv` is for narrow B, and the cost table says where that stops.**
+  Measured by operation count: at n=256 the flop ratio against `Expm` is 163x
+  at one column, 13.9x at eight and 1.8x at sixty-four. `Expmv` does not
+  detect this and will happily do the slow thing on a wide B. Whether it
+  should switch to `Expm` above some n0/n is a policy question that wants the
+  wall-clock crossover, not the flop one, so it needs the verification
+  machine.
 - ~~**What the secure-by-design migration cost is unmeasured.**~~ *Closed.*
   Measured on the 12700H: nothing, at any size. +7.2%, -6.7%, +0.5% at
   n=128/512/2048 — noise around zero, with the shipped path executing last and
@@ -937,10 +974,26 @@ a documented public API, and structure-typed dispatch. What remains:
    estimate is arithmetic, not measurement), no Schur-Parlett fallback for
    the badly nonnormal case, and the estimator's probe count is left at the
    default 2 rather than tuned for this use.
-2. **`expmv`** (Al-Mohy & Higham 2011) — computes `exp(A t) b` without forming
-   the exponential, a few dozen matvecs instead of ~15-25 GEMM-equivalents.
-   For a transient sweep this is likely a 100x algorithmic win that dwarfs any
-   further kernel tuning, and it is the natural bridge to sparse.
+2. ~~**`expmv`**~~ *Done.* Al-Mohy & Higham (2011), with the degree and
+   scaling chosen together to minimise applications. Two overloads: a dense
+   one that gets the trace shift and sharp `||A^k||^(1/k)` estimates, and a
+   matrix-free one over `ILinearOperator` that uses **only** `Apply` — no
+   transpose, no entries, no trace — which is what the interface split was
+   for. Verified against `Expm(A)*B`, which is itself independently verified,
+   so this got a far better oracle than `expm` had.
+
+   **The 100x estimate was low for the size that matters, and much too high
+   for a wide B.** Counted rather than timed (operation counts being the one
+   machine-independent performance quantity): with B a single column the flop
+   ratio against `Expm` is 34x at n=64, 163x at n=256 and 283-378x at n=1000.
+   But it falls off as B widens — at n=256 it is 13.9x at 8 columns and
+   **1.8x at 64**. The advantage is roughly n/n0, so `expmv` is for narrow B
+   and a wide one should form the exponential once instead. See "expmv is for
+   narrow B" under open items.
+
+   **What is not done**: no benchmark, and the flop ratio overstates the
+   wall-clock one because `Expm` spends its flops in GEMM near peak while
+   `Expmv` spends them in memory-bound panel products.
 3. Re-take the LU table on the 12700H now that both sides of the ratio use the
    same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while there.
 4. **Cholesky**, which is the cheapest way to make the structure vocabulary pay
@@ -986,11 +1039,19 @@ than on things no BLAS-lineage library can express:
 # Testing
 
 ```
-dotnet test Tensile.slnx -c Release                        # unit suite
+dotnet test --solution Tensile.slnx -c Release             # unit suite (see note)
 dotnet run -c Release --project tools/Tensile.Diagnostics  # what this host supports
 ./disasm.sh                                                # kernel codegen gate
 dotnet tests/Tensile.Fuzz/bin/Release/net10.0/Tensile.Fuzz.dll --self-check   # seed corpus replay
 ```
+
+Note the `--solution` flag. Since the test packages moved to
+Microsoft.Testing.Platform, `dotnet test Tensile.slnx` is rejected with
+"Specifying a solution for 'dotnet test' should be via '--solution'" — the
+positional form that used to work is gone, as is the positional project form.
+Bare `dotnet test` from the repository root still works. CI passes because its
+invocation already carries MTP-style options; this is a trap for a human at a
+terminal, not for the pipeline.
 
 To fuzz locally: `apt install afl++`, `dotnet tool install -g SharpFuzz.CommandLine`,
 publish `tests/Tensile.Fuzz` twice (one copy to instrument with `sharpfuzz

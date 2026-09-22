@@ -53,6 +53,7 @@ public static class Program
             ReportBlis();
             ReportLuPhases();
             ReportEstimatorAccuracy();
+            ReportExponentialAccuracy();
         }
 
         Console.WriteLine(passed ? "kernel checks: PASS" : "kernel checks: FAIL");
@@ -350,5 +351,129 @@ public static class Program
         for (int i = 0; i < count; i++) data[i] = rng.NextDouble() - 0.5;
 
         return data;
+    }
+
+    /// <summary>
+    /// How accurate the matrix exponential is, against an independent oracle.
+    ///
+    /// This is a report rather than an assertion for the same reason the
+    /// estimator's accuracy is: the honest answer is a distribution over
+    /// inputs, not a threshold. The suite pins correctness by invariants and
+    /// closed forms; what cannot be asserted is how many digits survive, which
+    /// depends on the matrix and on how many squarings the scaling forced.
+    ///
+    /// The oracle is a truncated Taylor series applied to A scaled to 1-norm
+    /// at most 1/32, where forty terms put truncation far below rounding. It
+    /// shares GEMM with the shipped path and nothing else -- no Padé
+    /// approximant, no linear solve, no theta table -- so agreement is real
+    /// evidence rather than two copies of the same mistake.
+    ///
+    /// What to look for: `rel.diff` should sit near the unit roundoff for
+    /// small norms and degrade roughly in step with `s`, since each squaring
+    /// is another chance to amplify what the approximant already got wrong.
+    /// A figure that jumps at one particular degree, rather than climbing with
+    /// s, would point at that degree's coefficients rather than at
+    /// conditioning.
+    /// </summary>
+    private static void ReportExponentialAccuracy()
+    {
+        Console.WriteLine("=== expm accuracy ===");
+        Console.WriteLine("  against a 40-term Taylor oracle at ||A||/2^s <= 1/32");
+        Console.WriteLine("     n     ||A||_1   degree    s     rel.diff");
+
+        foreach ((int n, double norm) in new[]
+        {
+            (8, 0.001), (8, 0.05), (8, 0.4), (8, 1.2), (8, 6.0), (8, 40.0),
+            (32, 0.8), (32, 12.0), (64, 2.5), (64, 100.0),
+        })
+        {
+            var a = RandomWithNorm(n, norm, seed: (n * 1000) + (int)(norm * 10));
+
+            var diagnostics = new ExpmDiagnostics();
+            var computed = MatrixExponential.Expm(a, workspace: null, diagnostics);
+            var reference = TaylorExponential(a);
+
+            double relative = RelativeOneNormDifference(computed, reference);
+
+            Console.WriteLine(
+                $"  {n,4}  {norm,10:0.###}  {diagnostics.Degree,6}  {diagnostics.Squarings,3}   {relative,10:E3}");
+        }
+
+        Console.WriteLine();
+
+        static Matrix<double> RandomWithNorm(int n, double target, int seed)
+        {
+            var rng = new Random(seed);
+            var a = new Matrix<double>(n, n);
+
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    a[i, j] = (rng.NextDouble() * 2.0) - 1.0;
+
+            return Rescale(a, target / a.OneNorm());
+        }
+
+        static Matrix<double> Rescale(Matrix<double> a, double scale)
+        {
+            var result = new Matrix<double>(a.Rows, a.Columns);
+
+            for (int j = 0; j < a.Columns; j++)
+                for (int i = 0; i < a.Rows; i++)
+                    result[i, j] = a[i, j] * scale;
+
+            return result;
+        }
+
+        static Matrix<double> TaylorExponential(Matrix<double> a)
+        {
+            int s = 0;
+            double norm = a.OneNorm();
+            while (norm > 0.03125)
+            {
+                norm *= 0.5;
+                s++;
+            }
+
+            var b = Rescale(a, Math.ScaleB(1.0, -s));
+
+            var result = Matrix.Identity<double>(a.Rows);
+            var term = Matrix.Identity<double>(a.Rows);
+
+            for (int k = 1; k <= 40; k++)
+            {
+                term = Rescale(term.Multiply(b.ReadOnlyView), 1.0 / k);
+
+                for (int j = 0; j < result.Columns; j++)
+                    for (int i = 0; i < result.Rows; i++)
+                        result[i, j] += term[i, j];
+            }
+
+            for (int i = 0; i < s; i++) result = result.Multiply(result.ReadOnlyView);
+
+            return result;
+        }
+
+        static double RelativeOneNormDifference(Matrix<double> x, Matrix<double> y)
+        {
+            double difference = 0.0;
+            double reference = 0.0;
+
+            for (int j = 0; j < x.Columns; j++)
+            {
+                double columnDifference = 0.0;
+                double columnReference = 0.0;
+
+                for (int i = 0; i < x.Rows; i++)
+                {
+                    columnDifference += Math.Abs(x[i, j] - y[i, j]);
+                    columnReference += Math.Abs(y[i, j]);
+                }
+
+                difference = Math.Max(difference, columnDifference);
+                reference = Math.Max(reference, columnReference);
+            }
+
+            return difference / Math.Max(reference, 1.0);
+        }
     }
 }

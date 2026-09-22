@@ -61,7 +61,7 @@ exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate` |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential` |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
@@ -80,6 +80,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
 | `src/Tensile/LinearOperators.cs` | `ILinearOperator` / `ITransposableOperator` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
+| `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
@@ -91,9 +92,9 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 914 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 965 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
-| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy; and the codegen gate's process |
+| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
 
@@ -756,6 +757,30 @@ well- and ill-conditioned inputs.
     comparable with anything from another sitting. Check the control before
     reading the experiment.
 
+13. **`expm` has two different constants both called theta_13, and picking the
+    wrong one is silent.** Table 3.1 of Al-Mohy & Higham (2009) gives
+    `theta_13 = 5.371920351148152`, the norm below which the degree-13
+    approximant meets the backward error bound. Algorithm 3.1 then chooses the
+    scaling parameter from `s = ceil(log2(eta_5 / theta_13))` — with **4.25**,
+    a deliberately smaller number. Using the table value there underscales by
+    one step on some inputs, which does not fail any structural test and does
+    not throw; it just quietly costs digits on exactly the nonnormal matrices
+    the 2009 algorithm exists to handle.
+
+    This was caught by checking the reference implementation rather than by
+    reasoning, and it is the reason the constant is named `ScalingThreshold` in
+    the source instead of `Theta13`. The general lesson for porting numerical
+    papers: a constant that appears twice with the same name in the literature
+    is a place to verify, not to infer, and the cost of getting it wrong is
+    measured in digits rather than in exceptions.
+
+    The defence that actually generalises is the oracle. A wrong threshold, a
+    mistyped Padé coefficient, or a sign error in the `ell` correction all
+    produce a plausible-looking matrix. What distinguishes them is an
+    independent implementation, and for the exponential a 40-term Taylor series
+    at `||A||/2^s <= 1/32` is one: obviously correct, far too slow to ship, and
+    sharing nothing with the Padé path but GEMM.
+
 ---
 
 # Design decisions and why
@@ -899,12 +924,19 @@ well- and ill-conditioned inputs.
 are done, and so is the library shaping: `src`/`tests`/`bench`/`tools` layout,
 a documented public API, and structure-typed dispatch. What remains:
 
-1. **`expm`** via Al-Mohy & Higham (2009) scaling-and-squaring with degree-13
-   Pade. Use the 2009 algorithm, not Higham 2005: it picks the scaling from
-   estimates of `||A^k||^(1/k)` rather than `||A||`, which specifically
-   mitigates overscaling on stiff matrices — exactly the MTL/FEM state matrices
-   this is for. Moler & Van Loan's "Nineteen Dubious Ways" is the reference to
-   keep open.
+1. ~~**`expm`**~~ *Done.* Al-Mohy & Higham (2009), the full degree
+   3/5/7/9/13 ladder with the `ell` correction, `Expm` on `Matrix<double>`.
+   The `||A^k||^(1/k)` estimates go through `DenseMatrixOperator` raised to a
+   power, so no power of A is formed to measure it — which is what that
+   parameter was built for. Verified three ways: the coefficient tables are
+   re-derived from their closed forms, closed-form exponentials pin the
+   analytic cases, and everything else is compared against an independent
+   Taylor oracle. Accuracy runs 2e-16 to 4e-13, degrading with the squaring
+   count and not with the degree, which is the shape backward stability
+   predicts. **What is not done**: no benchmark (so the 15-25 products
+   estimate is arithmetic, not measurement), no Schur-Parlett fallback for
+   the badly nonnormal case, and the estimator's probe count is left at the
+   default 2 rather than tuned for this use.
 2. **`expmv`** (Al-Mohy & Higham 2011) — computes `exp(A t) b` without forming
    the exponential, a few dozen matvecs instead of ~15-25 GEMM-equivalents.
    For a transient sweep this is likely a 100x algorithmic win that dwarfs any
@@ -998,6 +1030,17 @@ Guidance that has already been paid for once:
   its trailing update through GEMM. Assert the pivot sequence exactly (integer
   choices) and the factors by tolerance.
 - **Test a heuristic by its invariants**, not by its accuracy. See finding 8.
+- **Port a numerical paper against an oracle, not against a reading of it.**
+  `expm`'s coefficient tables are re-derived from their closed forms in the
+  suite, so a transcription slip fails rather than costing accuracy; the theta
+  thresholds cannot be derived that way, so what guards them is comparison
+  against an independent Taylor implementation. See finding 13.
+- **A branch with no test is as unverified as a file with no caller.** `expm`
+  picks one of five Padé degrees, and a suite whose matrices all landed on
+  degree 13 would leave four branches unexecuted while passing. That is why
+  `ExpmDiagnostics` exists and why `EveryPadeDegreeIsReached` asserts the set
+  of degrees observed, not just that the answers were right. Finding 10,
+  applied one level down.
 - **A `Skip` that is really an early `return` is a lie.** This is why the suite
   is on xunit.v3, which has `Assert.Skip`.
 - **The codegen gate needs a single process.** BenchmarkDotNet spawns a child

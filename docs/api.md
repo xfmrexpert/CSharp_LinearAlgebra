@@ -332,8 +332,51 @@ count. Shape validity is checked before policy, so an impossible shape is an
 
 ---
 
+## The matrix exponential
+
+`Expm` computes exp(A) — the sum of A^k/k!, not the element-wise exponential of
+the entries. The name is the one the literature uses, and is deliberately not
+`Exp`, which would be indistinguishable from an element-wise map at the call
+site.
+
+```csharp
+var result = a.Expm();                    // exp(A)
+var result = a.Expm(workspace);           // over a workspace you own
+```
+
+The algorithm is Al-Mohy and Higham (2009) scaling-and-squaring with Padé
+approximants of degree 3, 5, 7, 9 or 13, chosen by the norm of the input. It is
+the 2009 algorithm and not Higham's 2005 one: the scaling parameter is picked
+from estimates of ‖A^k‖^(1/k) rather than from ‖A‖, which for a nonnormal
+matrix can be very much smaller. That matters because every squaring step is
+another chance to amplify rounding error, so overscaling costs accuracy as well
+as time — and nonnormal state matrices are exactly what this library is for.
+
+Those ‖A^k‖^(1/k) estimates come from `NormEstimate` over a
+`DenseMatrixOperator` raised to a power, so no power of A is ever formed to
+measure it. This is what the operator's `power` parameter exists for.
+
+Accuracy is **backward stable**: the computed result is the exact exponential
+of A + E with ‖E‖ small relative to ‖A‖. It is not forward-accurate for every
+matrix, and no algorithm for the exponential is — a matrix whose exponential is
+genuinely ill-conditioned will lose digits here as it would anywhere. See Moler
+and Van Loan, "Nineteen Dubious Ways to Compute the Exponential of a Matrix".
+
+Measured against an independent Taylor oracle, the relative difference runs
+from 2·10⁻¹⁶ at small norms to 4·10⁻¹³ after four squarings; `tensile-diag`
+prints the table.
+
+Cost is dominated by matrix products: three to form the powers, two more for
+the degree-13 approximant, one LU factorization and solve, and one product per
+squaring step — on the order of 15 to 25 products of order n.
+
+---
+
 ## Not here yet
 
+- **`expmv`**, which computes exp(At)b without forming the exponential — a few
+  dozen matrix-vector products instead of ~20 matrix-matrix ones. It is the
+  next thing to land, and it will take `ILinearOperator` rather than a matrix.
 - **Complex**, which the transformer-winding application ultimately needs.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.

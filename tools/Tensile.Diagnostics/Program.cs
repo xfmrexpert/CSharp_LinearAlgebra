@@ -54,6 +54,7 @@ public static class Program
             ReportLuPhases();
             ReportEstimatorAccuracy();
             ReportExponentialAccuracy();
+            ReportExponentialActionCost();
         }
 
         Console.WriteLine(passed ? "kernel checks: PASS" : "kernel checks: FAIL");
@@ -474,6 +475,92 @@ public static class Program
             }
 
             return difference / Math.Max(reference, 1.0);
+        }
+    }
+
+    /// <summary>
+    /// What expmv costs against expm, counted rather than timed.
+    ///
+    /// Operation counts are the one performance quantity that is machine
+    /// independent, so unlike every table in CLAUDE.md's measured results this
+    /// one means the same thing wherever it runs. That is the whole reason it
+    /// is here: the claim that computing the action beats forming the
+    /// exponential is an algorithmic claim, and it can be settled by counting.
+    ///
+    /// `applied` is the number of times the operator was applied, which is
+    /// what the parameter selection minimises. The flop columns are
+    /// 2*n^2*n0 per application against expm's roughly (12.7 + 2s)*n^3 for the
+    /// powers, the degree-13 evaluation, the factorization, the solve and the
+    /// squarings, plus one 2*n^2*n0 product to apply the result to B.
+    ///
+    /// **The ratio is in flops and not in time, and the wall-clock advantage
+    /// will be smaller.** expm spends its flops in GEMM, which runs near the
+    /// machine's peak; expmv spends them in unpacked panel products, which are
+    /// memory-bound and run at a fraction of it. How much smaller is a
+    /// measurement, and it belongs on the verification machine rather than
+    /// here. What this table establishes is the size of the algorithmic gap
+    /// that measurement would be eating into.
+    /// </summary>
+    private static void ReportExponentialActionCost()
+    {
+        Console.WriteLine("=== expmv cost against expm ===");
+        Console.WriteLine("  counted, not timed: operation counts are machine independent");
+        Console.WriteLine("     n     ||A||_1   n0   degree    s   applied     expmv flop     expm flop   ratio");
+
+        foreach ((int n, double norm, int columns) in new[]
+        {
+            (64, 1.0, 1), (64, 10.0, 1), (64, 100.0, 1),
+            (256, 1.0, 1), (256, 10.0, 1), (256, 100.0, 1),
+            (1000, 10.0, 1), (1000, 100.0, 1),
+            (256, 10.0, 8), (256, 10.0, 64),
+        })
+        {
+            var a = RandomWithNorm(n, norm, seed: (n * 17) + (int)norm + columns);
+            var b = RandomWithNorm(n, 1.0, seed: 999);
+            var panel = new Matrix<double>(n, columns);
+
+            for (int j = 0; j < columns; j++)
+                for (int i = 0; i < n; i++)
+                    panel[i, j] = b[i, j % n];
+
+            var diagnostics = new ExpmvDiagnostics();
+            _ = MatrixExponentialAction.Expmv(a, panel.ReadOnlyView, 1.0, diagnostics);
+
+            var expmDiagnostics = new ExpmDiagnostics();
+            _ = MatrixExponential.Expm(a, workspace: null, expmDiagnostics);
+
+            double perApplication = 2.0 * n * (double)n * columns;
+            double actionFlops = diagnostics.Applications * perApplication;
+
+            // The powers, the degree-13 evaluation, the LU and its solve, the
+            // squarings -- then applying the formed exponential to B.
+            double exponentialFlops =
+                ((12.7 + (2.0 * expmDiagnostics.Squarings)) * n * (double)n * n) + perApplication;
+
+            Console.WriteLine(
+                $"  {n,4}  {norm,10:0.###}  {columns,3}  {diagnostics.Degree,6}  {diagnostics.Scaling,3}  "
+                + $"{diagnostics.Applications,8}  {actionFlops,13:E3}  {exponentialFlops,12:E3}  {exponentialFlops / actionFlops,6:F1}x");
+        }
+
+        Console.WriteLine();
+
+        static Matrix<double> RandomWithNorm(int n, double target, int seed)
+        {
+            var rng = new Random(seed);
+            var a = new Matrix<double>(n, n);
+
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    a[i, j] = (rng.NextDouble() * 2.0) - 1.0;
+
+            double norm = a.OneNorm();
+            var result = new Matrix<double>(n, n);
+
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    result[i, j] = a[i, j] * (target / norm);
+
+            return result;
         }
     }
 }

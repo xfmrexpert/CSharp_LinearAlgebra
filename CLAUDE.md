@@ -41,7 +41,10 @@ A library plus tests, benchmarks and a diagnostics tool, `net10.0`,
 column-major throughout, unit row stride. `Matrix<T>` is generic over
 `unmanaged, INumberBase<T>`, so storage, views and the structure vocabulary
 already work for any numeric type; arithmetic is double-only and lives in
-extensions on the closed `Matrix<double>`, so adding a type is additive.
+extensions on the closed `Matrix<double>`, so adding a type is additive. The
+one exception is the complex exponentials (`Expm`/`Expmv` on
+`Matrix<Complex>`), which reach the real code through `ComplexEmbedding`
+rather than through any complex arithmetic of their own.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
@@ -61,7 +64,7 @@ exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` (real and complex) |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
@@ -82,6 +85,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
 | `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
+| `src/Tensile/*.Complex.cs` | The complex `Expm`/`Expmv`, as partials of the real classes so a native implementation can replace the body without moving the signature |
+| `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back. Today's complex implementation and, permanently, the complex oracle |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
@@ -93,7 +98,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1007 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1059 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -807,6 +812,28 @@ well- and ill-conditioned inputs.
     reference relies on a numeric type that does not overflow, saturate, or
     round the way yours does.
 
+15. **A change of representation can silently drop an optimisation that lived
+    in the original arithmetic.** The complex `expmv` runs the real algorithm
+    on [[X, -Y], [Y, X]], and the real algorithm starts by shifting by
+    trace/n. But the real representation's trace is 2 Re(trace A), so that
+    shift can only ever remove the *real* part of the complex shift. The
+    imaginary part — a j*omega*I term, the oscillatory component — stayed in
+    the matrix. Every accuracy test passed, because the answer was right; it
+    was just slow. Measured on a skew-Hermitian operator of norm 5, adding
+    100i*I took the work from 23 applications to 561. The fix is to remove the
+    imaginary part in complex arithmetic before embedding and restore it as a
+    unit-modulus rotation after, which cannot overflow; the regression test
+    asserts the parameters are identical with and without the shift.
+
+    Two things made this easy to miss. The shift is an optimisation, so
+    losing it costs time and never correctness, and correctness is what the
+    suite checks. And the target application's own case would never have
+    shown it: the MTL chain matrix [[0, -Z], [-Y, 0]] has zero trace, so
+    there is no shift to lose. It was found only because the cost of the
+    embedding was measured rather than argued — the first version's doc
+    comment had already described the limitation, and underestimated it by
+    an order of magnitude.
+
 ---
 
 # Design decisions and why
@@ -863,6 +890,16 @@ well- and ill-conditioned inputs.
   operator — the actual target application — frequently applies A cheaply and
   cannot apply A^T at all, and `expmv` never needs the transpose. Split before
   `expmv` was written, while the interface was still cheap to change.
+
+- **Complex arrives through a real embedding first, native primitives later,
+  behind a signature that does not move.** `Expm`/`Expmv` on `Matrix<Complex>`
+  are partials of the real classes, so step 5 of the complex plan replaces
+  their bodies and no caller notices. The embedding then stays as the oracle:
+  an independent route to the same answer, built on real code that is already
+  verified — the same way `Expm` became `Expmv`'s oracle. The result is taken
+  by projecting onto the embedded form (averaging the paired blocks) rather
+  than reading one block pair, because the exact answer lies in that subspace
+  and orthogonal projection can therefore only reduce the error.
 
 ---
 
@@ -994,17 +1031,47 @@ a documented public API, and structure-typed dispatch. What remains:
    **What is not done**: no benchmark, and the flop ratio overstates the
    wall-clock one because `Expm` spends its flops in GEMM near peak while
    `Expmv` spends them in memory-bound panel products.
-3. Re-take the LU table on the 12700H now that both sides of the ratio use the
-   same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while there.
+3. ~~Re-take the LU table on the 12700H now that both sides of the ratio use
+   the same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while
+   there.~~ *Done* — see "LU" and "Serial vs threaded" above.
 4. **Cholesky**, which is the cheapest way to make the structure vocabulary pay
    off twice over: FEM mass and stiffness matrices are symmetric positive
    definite, and it is the third genuinely different `Solve` path.
 5. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
    GEMM.
-6. Complex support. `System.Numerics.Complex` is interleaved, which matches
-   `zgemm` layout but vectorises badly; a split (SoA) representation is 2-4x
-   faster for element-wise work. Start interleaved, switch only if profiling of
-   real assembly workloads says so.
+6. **Complex support**, staged so the application is never blocked on the
+   kernels:
+
+   0. ~~Complex `Expm`/`Expmv` through the real embedding.~~ *Done.* Runs the
+      verified real algorithms on [[X, -Y], [Y, X]]. Accurate to 3e-16 -
+      2e-13 against an independent complex Taylor series, and the computed
+      result stays within 5e-15 of the complex block structure before the
+      projection. Costs 2x flops for `Expm`, 1x for `Expmv`, 2x memory, and a
+      parameter choice up to sqrt(2) conservative. See finding 15 for what the
+      first version got wrong.
+   1. The API decisions, before any complex kernel code: `ILinearOperator<T>`;
+      transpose becomes **adjoint**, since `normest1` on a complex operator
+      needs A^H and for real matrices the two only happen to coincide; and
+      generic-at-the-algorithm-layer versus per-type copies.
+   2. Complex GEMM via 4M over the real kernel — four real GEMMs, 8n^3 real
+      flops, exactly the complex count, reusing the verified kernel and the
+      codegen gate. **Not 3M**: it is 25% cheaper but not componentwise stable,
+      and a small component (in a lossy line, often the damping) can be lost.
+   3. Complex LU and solves. LAPACK's `izamax` pivots on |Re| + |Im|, not |z|;
+      match it to keep pivot sequences comparable with `zgetrf`, as
+      `Pivoting` does for the real case.
+   4. Complex `normest1`: A^H for A^T, unit-modulus signs x/|x| for +-1, and
+      no parallel-column resampling, which only applies to real sign vectors.
+   5. Native `expm`/`expmv`, verified against the embedding.
+   6. Only if profiling asks: splitting inside packing (BLIS's 1M) instead of
+      into temporaries, a complex micro-kernel, or split storage.
+      `System.Numerics.Complex` is interleaved, which matches `zgemm` layout
+      but vectorises badly for element-wise work; start interleaved.
+
+   For a frequency sweep, parallelise across frequencies and run each
+   exponential serial: at 2N of a few hundred each 4M GEMM is already above
+   the 2^24 threshold and would thread internally, and the two levels would
+   fight over cores.
 
 ## Deliberately deferred
 

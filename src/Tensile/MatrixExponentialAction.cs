@@ -30,7 +30,7 @@ namespace Tensile;
 /// without assembling it plugs in here directly, and nothing in this algorithm
 /// ever needs A's entries or its transpose.
 /// </summary>
-public static class MatrixExponentialAction
+public static partial class MatrixExponentialAction
 {
     /// <summary>
     /// The largest ||tA|| at which a degree-m truncated Taylor series meets

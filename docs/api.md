@@ -435,9 +435,63 @@ have.
 
 ---
 
+## Complex matrices
+
+`Expm` and `Expmv` accept `Matrix<Complex>` (`System.Numerics.Complex`) with the
+same call shape as the real ones:
+
+```csharp
+var e = z.Expm();                          // exp(Z)
+var y = z.Expmv(b.ReadOnlyView, t: 0.5);   // exp(0.5 Z) B, t real
+```
+
+In the standard multiconductor-line formulation this is the chain-parameter
+matrix Φ(ℓ) = exp(Mℓ), with M = [[0, −Z(ω)], [−Y(ω), 0]] complex at each
+frequency, so a frequency sweep is one of these per frequency.
+
+**How they are computed today.** Nothing else in the library does complex
+arithmetic yet — no complex GEMM, LU or norm estimator — so these run the real
+algorithms on the real representation of the complex matrix: X + iY becomes
+the 2n×2n matrix [[X, −Y], [Y, X]], which the exponential commutes with. The
+answer is the real algorithm's, verified against an independent complex Taylor
+series and against invariants such as exp(iH) being unitary for Hermitian H.
+The public signatures will not change when native complex primitives replace
+this.
+
+What the route costs, compared with a native implementation that does not
+exist yet:
+
+| | `Expm` | `Expmv` |
+| --- | --- | --- |
+| Flops | 2× — each product computes every block twice | 1× — the stacked panel is not redundant |
+| Memory | 2× | 2× for the matrix |
+| Parameter choice | at most one extra squaring | scaling up to √2 larger |
+
+The last row is because the embedded 1-norm is between 1 and √2 times the
+complex one. Random complex matrices sit near √2 (1.28–1.39 measured); real
+ones sit at exactly 1, and a real matrix passed as complex takes exactly the
+real path, parameters included. `Expmv` is memory-bound, so expect its time
+nearer twice a native version's than level with it despite equal flops —
+unmeasured.
+
+`Expmv` removes the **imaginary** part of the trace shift itself before
+embedding, because the real representation cannot: its trace is only
+2·Re(trace A). The shift comes back as a unit-modulus factor e^(itω), which
+cannot overflow. This matters for any operator carrying a large imaginary
+diagonal — a jωI term — where leaving it in cost up to 24× the work in
+measurement. (The MTL chain matrix has zero trace, so it is unaffected either
+way.)
+
+Dense only for now: a matrix-free complex operator needs a complex operator
+interface, which has not been designed yet.
+
+---
+
 ## Not here yet
 
-- **Complex**, which the transformer-winding application ultimately needs.
+- **Complex arithmetic beyond the exponentials** — complex GEMM, LU, solves and
+  norm estimation. The exponentials above reach complex matrices through a real
+  representation instead, and a matrix-free complex operator has no interface yet.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
 - **Arithmetic for any type but `double`.** Storage is generic; operations are

@@ -198,7 +198,7 @@ public sealed class AllocationLimitTests : IDisposable
         Assert.Throws<AllocationLimitException>(() => a.Expmv(b.ReadOnlyView));
     }
 
-    private sealed class UntouchedOperator(int order) : ITransposableOperator
+    private sealed class UntouchedOperator(int order) : IAdjointOperator<double>
     {
         public bool Touched { get; private set; }
 
@@ -206,6 +206,6 @@ public sealed class AllocationLimitTests : IDisposable
 
         public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
 
-        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
+        public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
     }
 }

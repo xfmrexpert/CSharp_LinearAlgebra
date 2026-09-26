@@ -64,7 +64,7 @@ exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` (real and complex) |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator<T>`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` (real and complex) |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
@@ -81,12 +81,12 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/MatrixShape.cs` | Self-validating shape value; all extent/offset arithmetic, checked in `long` |
 | `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`: `Span`-backed ref structs, obtained only by `Bind` or slicing; no pointer constructor |
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
-| `src/Tensile/LinearOperators.cs` | `ILinearOperator` / `ITransposableOperator` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
+| `src/Tensile/LinearOperators.cs` | `ILinearOperator<T>` / `IAdjointOperator<T>` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
 | `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
 | `src/Tensile/*.Complex.cs` | The complex `Expm`/`Expmv`, as partials of the real classes so a native implementation can replace the body without moving the signature |
-| `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back. Today's complex implementation and, permanently, the complex oracle |
+| `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back, and `EmbeddedOperator` for matrix-free complex operators. Today's complex implementation and, permanently, the complex oracle |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
@@ -98,7 +98,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1059 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1071 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -874,22 +874,34 @@ well- and ill-conditioned inputs.
   So `Blas1` became `ColumnOps` (the shared vectorised column updates) plus
   `Pivoting` (a *search*, whose contract is the index it returns, not a
   residual), and `Blas2` became `PanelProduct.Apply`/`ApplyTranspose`, named
-  for `ILinearOperator.Apply` — its only consumer, through
+  for `ILinearOperator<T>.Apply` — its only consumer, through
   `KernelEntry.MultiplyPanel`. The old name was wrong on BLAS's own terms
   anyway: `Y := A*X` for an n x t panel is a matrix-matrix product that happens
   to be computed a column at a time, not a level-2 operation.
   `Blas1.MaxAbsStrided` was deleted in the same pass — it had no caller
   anywhere, which is finding 10 exactly.
 
-- **The operator interfaces are split by capability.** `ILinearOperator`
-  requires `Apply` only; `ITransposableOperator` adds `ApplyTranspose`, and
-  that is what `NormEstimate` takes, because Higham and Tisseur's estimator
-  alternates products with A and A^T. Requiring both on one interface is the
-  same mistake as a `trans` flag on every BLAS signature: it makes every
-  implementer carry what one algorithm needs. A matrix-free FEM or MTL
+- **The operator interfaces are split by capability.** `ILinearOperator<T>`
+  requires `Apply` only; `IAdjointOperator<T>` adds `ApplyAdjoint`, and that
+  is what `NormEstimate` takes, because Higham and Tisseur's estimator
+  alternates products with A and its adjoint. Requiring both on one interface
+  is the same mistake as a `trans` flag on every BLAS signature: it makes
+  every implementer carry what one algorithm needs. A matrix-free FEM or MTL
   operator — the actual target application — frequently applies A cheaply and
-  cannot apply A^T at all, and `expmv` never needs the transpose. Split before
-  `expmv` was written, while the interface was still cheap to change.
+  cannot apply A^H at all, and `expmv` never needs it. Split before `expmv`
+  was written, while the interface was still cheap to change.
+
+- **The operator interfaces are generic, and the second one is the adjoint,
+  not the transpose.** Both became generic over the element type when complex
+  arrived, replacing the double-only originals outright rather than living
+  alongside them — pre-1.0, and two parallel interfaces for one idea is the
+  kind of duplication this codebase keeps removing. `ApplyTranspose` became
+  `ApplyAdjoint` in the same change: the estimator needs A^H, the two
+  coincide only for real operators, and a complex implementer handed a method
+  called "transpose" would supply the wrong operation and get an estimator
+  that is quietly wrong. The public algorithm surface stays concrete —
+  overloads for `double` and `Complex` only — over a generic interior, so an
+  element type with no arithmetic fails to compile rather than at run time.
 
 - **Complex arrives through a real embedding first, native primitives later,
   behind a signature that does not move.** `Expm`/`Expmv` on `Matrix<Complex>`
@@ -1049,10 +1061,18 @@ a documented public API, and structure-typed dispatch. What remains:
       projection. Costs 2x flops for `Expm`, 1x for `Expmv`, 2x memory, and a
       parameter choice up to sqrt(2) conservative. See finding 15 for what the
       first version got wrong.
-   1. The API decisions, before any complex kernel code: `ILinearOperator<T>`;
-      transpose becomes **adjoint**, since `normest1` on a complex operator
-      needs A^H and for real matrices the two only happen to coincide; and
-      generic-at-the-algorithm-layer versus per-type copies.
+   1. ~~The API decisions.~~ *Decided and, where there was code to change,
+      done.* `ILinearOperator<T>` replaces the double-only interface outright;
+      `ITransposableOperator` became `IAdjointOperator<T>` with
+      `ApplyAdjoint`; the public algorithm surface stays concrete (`double`
+      and `Complex` overloads) over a generic interior. The generic interior's
+      shape — a static-abstract kernel interface per element type, dispatched
+      the way `IMicroKernel` and `IMatrixStructure` already are — is agreed in
+      principle but deliberately **not written yet**: it goes in with step 2,
+      where `ComplexKernels` gives it a second implementation to be shaped by
+      rather than guessed from one. The interface change also gave the
+      matrix-free complex `Expmv` the operator type it was waiting on, and
+      that overload is in.
    2. Complex GEMM via 4M over the real kernel — four real GEMMs, 8n^3 real
       flops, exactly the complex count, reusing the verified kernel and the
       codegen gate. **Not 3M**: it is 25% cheaper but not componentwise stable,

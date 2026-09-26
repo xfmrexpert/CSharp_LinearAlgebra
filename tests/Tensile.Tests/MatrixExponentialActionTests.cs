@@ -202,7 +202,7 @@ public class MatrixExponentialActionTests
 
     /// <summary>
     /// The operator overload must never touch the transpose. An operator whose
-    /// ApplyTranspose throws proves it, and this is the contract that lets a
+    /// ApplyAdjoint throws proves it, and this is the contract that lets a
     /// matrix-free FEM operator use this at all.
     /// </summary>
     [Fact]
@@ -213,7 +213,7 @@ public class MatrixExponentialActionTests
         var a = RandomWithOneNorm(N, 4.0, seed: 3333);
         var b = RandomPanel(N, columns: 1, seed: 3434);
 
-        // ApplyOnlyOperator implements only ILinearOperator, so there is no
+        // ApplyOnlyOperator implements only ILinearOperator<double>, so there is no
         // transpose to call even by accident; this asserts the overload binds
         // to the narrow interface and completes.
         var result = MatrixExponentialAction.Expmv(
@@ -421,11 +421,11 @@ public class MatrixExponentialActionTests
     // ---- helpers ------------------------------------------------------------
 
     /// <summary>
-    /// An operator that implements only <see cref="ILinearOperator"/>. It has
+    /// An operator that implements only <see cref="ILinearOperator{T}"/>. It has
     /// no transpose to apply, which is the whole point: if the matrix-free
     /// overload ever needed one, this would not compile.
     /// </summary>
-    private sealed class ApplyOnlyOperator(Matrix<double> a) : ILinearOperator
+    private sealed class ApplyOnlyOperator(Matrix<double> a) : ILinearOperator<double>
     {
         public int Order => a.Rows;
 

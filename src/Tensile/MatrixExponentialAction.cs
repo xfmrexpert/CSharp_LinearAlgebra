@@ -25,7 +25,7 @@ namespace Tensile;
 ///   result at the working precision, so the degree m is a cap rather than a
 ///   count.
 ///
-/// The operator overload takes <see cref="ILinearOperator"/> and not a matrix,
+/// The operator overload takes <see cref="ILinearOperator{T}"/> and not a matrix,
 /// which is the point of that interface: an FEM or MTL operator that applies A
 /// without assembling it plugs in here directly, and nothing in this algorithm
 /// ever needs A's entries or its transpose.
@@ -144,11 +144,11 @@ public static partial class MatrixExponentialAction
     /// <summary>
     /// exp(tA)B for an operator that is applied rather than stored.
     ///
-    /// Only <see cref="ILinearOperator.Apply"/> is used: no transpose, no
+    /// Only <see cref="ILinearOperator{T}.Apply"/> is used: no adjoint, no
     /// entries, no trace. That is why this takes the narrow interface, and it
     /// is the form a matrix-free FEM or MTL operator plugs into.
     ///
-    /// The price is the parameter choice. Without products by A^T the
+    /// The price is the parameter choice. Without products by the adjoint the
     /// ||A^p||^(1/p) quantities cannot be estimated, so the scaling falls back
     /// to <paramref name="oneNormBound"/>. Since ||A^p||^(1/p) is never larger
     /// than ||A||, that is always safe -- it can only choose a larger s than
@@ -165,12 +165,12 @@ public static partial class MatrixExponentialAction
     /// <exception cref="ArgumentException">B has the wrong number of rows.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The norm bound is negative or not finite.</exception>
     public static Matrix<double> Expmv(
-        ILinearOperator op, ReadOnlyMatrixView<double> b, double t, double oneNormBound) =>
+        ILinearOperator<double> op, ReadOnlyMatrixView<double> b, double t, double oneNormBound) =>
         Expmv(op, b, t, oneNormBound, diagnostics: null);
 
     /// <summary>The matrix-free implementation, with an optional report of the parameters chosen.</summary>
     internal static Matrix<double> Expmv(
-        ILinearOperator op,
+        ILinearOperator<double> op,
         ReadOnlyMatrixView<double> b,
         double t,
         double oneNormBound,
@@ -198,7 +198,7 @@ public static partial class MatrixExponentialAction
     /// then run the scaled Taylor recurrence.
     /// </summary>
     private static Matrix<double> Run(
-        ILinearOperator op,
+        ILinearOperator<double> op,
         ReadOnlyMatrixView<double> b,
         double t,
         double mu,

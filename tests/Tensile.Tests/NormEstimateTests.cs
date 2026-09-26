@@ -22,7 +22,7 @@ namespace Tensile.Tests;
 /// the unit-vector selection -- without ever asserting a specific estimate.
 ///
 /// The estimator is driven through its public shape, an
-/// <see cref="ILinearOperator"/> over a <see cref="Matrix{T}"/>, since that is
+/// <see cref="ILinearOperator{T}"/> over a <see cref="Matrix{T}"/>, since that is
 /// the only shape it has; the exact norms it is checked against are the
 /// kernel layer's, over pointers, so the two sides share no code.
 /// </summary>
@@ -180,7 +180,7 @@ public class NormEstimateTests
 
         Assert.Throws<ArgumentException>(() => op.Apply(new Matrix<double>(3, 2), new Matrix<double>(4, 2)));
         Assert.Throws<ArgumentException>(() => op.Apply(new Matrix<double>(4, 2), new Matrix<double>(4, 3)));
-        Assert.Throws<ArgumentException>(() => op.ApplyTranspose(new Matrix<double>(4, 2), new Matrix<double>(5, 2)));
+        Assert.Throws<ArgumentException>(() => op.ApplyAdjoint(new Matrix<double>(4, 2), new Matrix<double>(5, 2)));
         Assert.Throws<ArgumentException>(() => new DenseMatrixOperator(new Matrix<double>(3, 4)));
         Assert.Throws<ArgumentOutOfRangeException>(() => new DenseMatrixOperator(Matrix.Identity<double>(4), power: 0));
     }
@@ -266,7 +266,7 @@ public class NormEstimateTests
         return matrix;
     }
 
-    private sealed class RecordingOperator(Matrix<double> a) : ITransposableOperator
+    private sealed class RecordingOperator(Matrix<double> a) : IAdjointOperator<double>
     {
         private readonly DenseMatrixOperator _inner = new(a);
 
@@ -280,10 +280,10 @@ public class NormEstimateTests
             _inner.Apply(x, y);
         }
 
-        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+        public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y)
         {
             Shapes.Add((x.Rows, x.Columns, y.Rows, y.Columns));
-            _inner.ApplyTranspose(x, y);
+            _inner.ApplyAdjoint(x, y);
         }
     }
 }

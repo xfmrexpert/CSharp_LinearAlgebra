@@ -169,3 +169,65 @@ internal static class ComplexEmbedding
         return scale == 0.0 ? defect : defect / scale;
     }
 }
+
+/// <summary>
+/// A complex operator presented to the real algorithms as its real
+/// representation: applying this to a 2n x k stack [u; v] applies the complex
+/// operator to u + iv and restacks the result. Because Embed(A) Stack(b) =
+/// Stack(A b), this is exactly Embed(A) acting on the stack, and it costs one
+/// application of the complex operator plus O(nk) of copying.
+///
+/// Holds two scratch panels, reused for as long as the column count stays the
+/// same, so it is not safe to apply from two threads at once. It is created
+/// per call and never escapes one, which is why that is acceptable.
+/// </summary>
+internal sealed class EmbeddedOperator(ILinearOperator<Complex> inner) : ILinearOperator<double>
+{
+    private Matrix<Complex>? _x;
+    private Matrix<Complex>? _y;
+
+    /// <inheritdoc/>
+    /// <remarks>The caller has already checked that twice the inner order fits an int.</remarks>
+    public int Order => 2 * inner.Order;
+
+    /// <inheritdoc/>
+    public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    {
+        if (x.Rows != Order || y.Rows != Order || x.Columns != y.Columns)
+        {
+            throw new ArgumentException(
+                $"Panels are {x.Rows}x{x.Columns} and {y.Rows}x{y.Columns}, expected {Order} rows and matching widths.",
+                nameof(y));
+        }
+
+        int n = inner.Order;
+        int k = x.Columns;
+
+        if (_x is null || _x.Columns != k)
+        {
+            _x = new Matrix<Complex>(n, k);
+            _y = new Matrix<Complex>(n, k);
+        }
+
+        for (int j = 0; j < k; j++)
+        {
+            ReadOnlySpan<double> from = x.Column(j);
+            Span<Complex> to = _x.Column(j);
+            for (int i = 0; i < n; i++) to[i] = new Complex(from[i], from[i + n]);
+        }
+
+        inner.Apply(_x.ReadOnlyView, _y!.View);
+
+        for (int j = 0; j < k; j++)
+        {
+            ReadOnlySpan<Complex> from = _y.ReadOnlyView.Column(j);
+            Span<double> to = y.Column(j);
+
+            for (int i = 0; i < n; i++)
+            {
+                to[i] = from[i].Real;
+                to[i + n] = from[i].Imaginary;
+            }
+        }
+    }
+}

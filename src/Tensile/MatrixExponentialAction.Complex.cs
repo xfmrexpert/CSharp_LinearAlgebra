@@ -35,8 +35,9 @@ public static partial class MatrixExponentialAction
     /// raise the scaling s. Random complex matrices sit near that bound, at
     /// 1.28 to 1.39 in measurement; real ones sit at exactly 1.
     ///
-    /// Dense only for now. A matrix-free complex operator needs a complex
-    /// operator interface, which is an API decision still to be made.
+    /// For an operator that is applied rather than stored, see the
+    /// <see cref="Expmv(ILinearOperator{Complex}, ReadOnlyMatrixView{Complex}, double, double)"/>
+    /// overload.
     /// </summary>
     /// <param name="a">The operator. Must be square. Not modified.</param>
     /// <param name="b">The panel to apply exp(tA) to, with as many rows as A. Not modified.</param>
@@ -95,6 +96,81 @@ public static partial class MatrixExponentialAction
         if (omega != 0.0) ScaleInPlace(result, Complex.FromPolarCoordinates(1.0, t * omega));
 
         return result;
+    }
+
+    /// <summary>
+    /// exp(tA)B for a complex operator that is applied rather than stored --
+    /// the form a frequency-domain FEM or MTL operator plugs into.
+    ///
+    /// Only <see cref="ILinearOperator{T}.Apply"/> is used: no adjoint, no
+    /// entries, no trace. The operator is presented to the real algorithm as
+    /// its 2n x 2n real representation, applied through the complex operator
+    /// itself, so each application costs one complex application plus O(nk)
+    /// of copying.
+    ///
+    /// Two consequences of having no entries. The scaling falls back to
+    /// <paramref name="oneNormBound"/>, as the real matrix-free overload's
+    /// does; it is multiplied by sqrt(2) internally, because that is the most
+    /// the real representation's norm can exceed the complex one by. And
+    /// there is no trace, so no shift of either kind: an operator carrying a
+    /// large j*omega*I term keeps it, and it can cost an order of magnitude in
+    /// applications. If you know the shift, remove it yourself --
+    /// exp(tA)B = e^(i omega t) exp(t(A - i omega I))B exactly -- and apply
+    /// the operator without it.
+    /// </summary>
+    /// <param name="op">The complex operator. Applied, never inspected.</param>
+    /// <param name="b">The panel to apply exp(tA) to, with as many rows as the operator's order.</param>
+    /// <param name="t">The time, or any real multiplier on A. May be negative or zero.</param>
+    /// <param name="oneNormBound">An upper bound on the complex ||A||_1. Must be finite and not negative.</param>
+    /// <returns>A new matrix holding exp(tA)B, the same shape as B.</returns>
+    /// <exception cref="ArgumentNullException">The operator is null.</exception>
+    /// <exception cref="ArgumentException">B has the wrong number of rows.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The norm bound is negative or not finite, or the operator's order is so
+    /// large that its real representation's order, twice it, would not fit an
+    /// int. An operator is free to report any order, so that is checked before
+    /// anything is sized from it.
+    /// </exception>
+    /// <exception cref="AllocationLimitException">A panel of the real representation exceeds <see cref="TensileLimits.MaxElements"/>.</exception>
+    public static Matrix<Complex> Expmv(
+        ILinearOperator<Complex> op, ReadOnlyMatrixView<Complex> b, double t, double oneNormBound) =>
+        Expmv(op, b, t, oneNormBound, diagnostics: null);
+
+    /// <summary>The matrix-free complex implementation, with an optional report of the parameters chosen.</summary>
+    internal static Matrix<Complex> Expmv(
+        ILinearOperator<Complex> op,
+        ReadOnlyMatrixView<Complex> b,
+        double t,
+        double oneNormBound,
+        ExpmvDiagnostics? diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+
+        // Before anything is sized from the order: an operator reports what it
+        // likes, and 2 * Order would trap in this checked assembly rather than
+        // be reported as the argument error it is.
+        if (op.Order > int.MaxValue / 2)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(op), op.Order, "The operator's real representation would have an order that does not fit an int.");
+        }
+
+        if (b.Rows != op.Order)
+            throw new ArgumentException($"B has {b.Rows} rows, expected the operator's order {op.Order}.", nameof(b));
+
+        if (!double.IsFinite(oneNormBound) || oneNormBound < 0.0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(oneNormBound), oneNormBound, "The norm bound must be finite and not negative.");
+        }
+
+        if (op.Order == 0 || b.Columns == 0) return Matrix.From(b);
+
+        var stacked = ComplexEmbedding.Stack(b);
+        var result = Expmv(
+            new EmbeddedOperator(op), stacked.ReadOnlyView, t, oneNormBound * Math.Sqrt(2.0), diagnostics);
+
+        return ComplexEmbedding.Unstack(result);
     }
 
     private static Complex Trace(Matrix<Complex> a)

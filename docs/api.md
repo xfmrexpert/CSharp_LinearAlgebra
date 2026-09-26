@@ -248,34 +248,41 @@ rather than measured.
 
 ## Matrix-free operators and norm estimation
 
-`ILinearOperator` is the extension point for anything that can be applied but
-should not be formed: a matrix power, an inverse, and later the operators
-`expm` and `expmv` probe. It takes and returns bound views, so an
-implementation receives the extents along with the data and cannot be handed a
-buffer shorter than its `Order` claims.
+`ILinearOperator<T>` is the extension point for anything that can be applied
+but should not be formed: a matrix power, an inverse, and the operators `expm`
+and `expmv` probe. It takes and returns bound views, so an implementation
+receives the extents along with the data and cannot be handed a buffer shorter
+than its `Order` claims. `T` is the element type — `double` or `Complex` for
+anything the library computes with.
 
 ```csharp
-public interface ILinearOperator
+public interface ILinearOperator<T>
 {
     int Order { get; }
-    void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);            // Y := A X
+    void Apply(ReadOnlyMatrixView<T> x, MatrixView<T> y);            // Y := A X
 }
 
-public interface ITransposableOperator : ILinearOperator
+public interface IAdjointOperator<T> : ILinearOperator<T>
 {
-    void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);   // Y := Aᵀ X
+    void ApplyAdjoint(ReadOnlyMatrixView<T> x, MatrixView<T> y);     // Y := Aᴴ X
 }
 ```
 
-The transpose is a **separate capability**, not part of the base contract. A
+The adjoint is a **separate capability**, not part of the base contract. A
 matrix-free operator — an FEM or MTL operator assembled on the fly — can very
-often apply `A` and not cheaply apply `Aᵀ`, so requiring both would force every
-implementer to supply a transpose in order that one algorithm could have it.
-Implement `ILinearOperator` if you only ever apply forward;
-`ITransposableOperator` is what `NormEstimate` asks for, because Higham and
-Tisseur's estimator alternates products with `A` and `Aᵀ`.
+often apply `A` and not cheaply apply `Aᴴ`, so requiring both would force every
+implementer to supply one in order that one algorithm could have it. Implement
+`ILinearOperator<T>` if you only ever apply forward; `IAdjointOperator<T>` is
+what `NormEstimate` asks for, because Higham and Tisseur's estimator alternates
+products with `A` and its adjoint.
 
-Two implementations ship, both transposable. `DenseMatrixOperator(a, power)`
+It is the **adjoint** — the conjugate transpose — and not the transpose,
+because that is what the estimator needs. For a real operator the two are the
+same, which is why this was once called `ApplyTranspose`. For a complex one the
+transpose is the wrong operation, and supplying it would give an estimator that
+is quietly wrong rather than one that fails.
+
+Two implementations ship, both `IAdjointOperator<double>`. `DenseMatrixOperator(a, power)`
 applies `Aᵖ` by `p` successive panel products without forming the power;
 `LuInverseOperator(lu)` applies `A⁻¹` by solving. Both are what `NormEstimate`
 needs:
@@ -425,9 +432,9 @@ than a matrix, and uses **only** `Apply` — no transpose, no entries, no trace:
 var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
 ```
 
-This is why `ILinearOperator` does not require a transpose. The price is the
-parameter choice: without products by Aᵀ the ‖A^p‖^(1/p) quantities cannot be
-estimated, so the scaling falls back to the bound you supply. Since
+This is why `ILinearOperator<T>` does not require an adjoint. The price is the
+parameter choice: without products by the adjoint the ‖A^p‖^(1/p) quantities
+cannot be estimated, so the scaling falls back to the bound you supply. Since
 ‖A^p‖^(1/p) ≤ ‖A‖, that is always safe — it can only pick a larger s than
 necessary, never a smaller one — but for a strongly nonnormal operator it can
 be a lot more work than the dense path would do. Supply the tightest bound you
@@ -482,8 +489,19 @@ diagonal — a jωI term — where leaving it in cost up to 24× the work in
 measurement. (The MTL chain matrix has zero trace, so it is unaffected either
 way.)
 
-Dense only for now: a matrix-free complex operator needs a complex operator
-interface, which has not been designed yet.
+A matrix-free complex operator — an `ILinearOperator<Complex>` — has its own
+overload, which applies the operator through its real representation without
+ever forming it:
+
+```csharp
+var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
+```
+
+As with the real matrix-free overload, the scaling comes from the bound you
+supply (scaled internally by √2 for the real representation). There is no
+trace to shift by either, so an operator carrying a large jωI term keeps it.
+If you know that shift, remove it yourself: exp(tA)B = e^(iωt)·exp(t(A − iωI))B,
+exactly, and apply the operator without it.
 
 ---
 
@@ -491,7 +509,7 @@ interface, which has not been designed yet.
 
 - **Complex arithmetic beyond the exponentials** — complex GEMM, LU, solves and
   norm estimation. The exponentials above reach complex matrices through a real
-  representation instead, and a matrix-free complex operator has no interface yet.
+  representation instead.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
 - **Arithmetic for any type but `double`.** Storage is generic; operations are

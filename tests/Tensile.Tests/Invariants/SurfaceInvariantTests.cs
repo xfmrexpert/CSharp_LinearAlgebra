@@ -73,14 +73,15 @@ public class SurfaceInvariantTests
     /// operator plug in -- and a pointer in one of their signatures is a
     /// pointer every implementer must handle.
     ///
-    /// Both are checked. An interface's <c>GetMethods</c> does not report the
-    /// members of the interfaces it extends, so testing only the transposable
-    /// one would leave <c>Apply</c> unexamined and testing only the base one
-    /// would leave <c>ApplyTranspose</c> unexamined.
+    /// Both are checked, as open generic definitions so the check covers every
+    /// element type. An interface's <c>GetMethods</c> does not report the
+    /// members of the interfaces it extends, so testing only the adjoint one
+    /// would leave <c>Apply</c> unexamined and testing only the base one
+    /// would leave <c>ApplyAdjoint</c> unexamined.
     /// </summary>
     [Theory]
-    [InlineData(typeof(ILinearOperator))]
-    [InlineData(typeof(ITransposableOperator))]
+    [InlineData(typeof(ILinearOperator<>))]
+    [InlineData(typeof(IAdjointOperator<>))]
     public void LinearOperatorContractHasNoPointers(Type contract)
     {
         var offenders = contract.GetMethods()

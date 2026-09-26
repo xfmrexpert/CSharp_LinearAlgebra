@@ -413,6 +413,106 @@ public class ComplexExponentialTests
         }
     }
 
+    // ---- the matrix-free complex path -------------------------------------------
+
+    /// <summary>
+    /// The operator overload must reach the dense overload's answer by a
+    /// different route: no trace shift, no sharp estimates, a supplied bound,
+    /// and every application made through the complex operator itself rather
+    /// than through a formed real matrix.
+    /// </summary>
+    [Theory]
+    [InlineData(8, 0.5)]
+    [InlineData(8, 6.0)]
+    [InlineData(20, 15.0)]
+    public void MatrixFreeAgreesWithTheDensePath(int n, double norm)
+    {
+        var a = WithOneNorm(RandomComplex(n, n, seed: 40 + n), norm);
+        var b = RandomComplex(n, 2, seed: 41);
+
+        var dense = a.Expmv(b.ReadOnlyView);
+        var free = MatrixExponentialAction.Expmv(
+            new ApplyOnlyComplexOperator(a), b.ReadOnlyView, t: 1.0, oneNormBound: ComplexOneNorm(a));
+
+        double relative = RelativeDifference(free, dense);
+        Assert.True(relative <= Tolerance, $"n={n}, ||A||={norm}: {relative:E3}");
+    }
+
+    [Theory]
+    [InlineData(-2.0)]
+    [InlineData(0.0)]
+    [InlineData(3.5)]
+    public void MatrixFreeHandlesTheTimeArgument(double t)
+    {
+        const int N = 10;
+
+        var a = WithOneNorm(RandomComplex(N, N, seed: 42), 2.0);
+        var b = RandomComplex(N, 1, seed: 43);
+
+        var free = MatrixExponentialAction.Expmv(
+            new ApplyOnlyComplexOperator(a), b.ReadOnlyView, t, ComplexOneNorm(a));
+        var expected = Multiply(TaylorOracle(Scaled(a, t)), b);
+
+        Assert.True(RelativeDifference(free, expected) <= Tolerance);
+    }
+
+    /// <summary>The unitary invariant, reached through an operator that exposes nothing but Apply.</summary>
+    [Fact]
+    public void MatrixFreePreservesNormForASkewHermitianOperator()
+    {
+        const int N = 16;
+
+        var a = WithOneNorm(Scaled(Hermitian(N, seed: 44), Complex.ImaginaryOne), 30.0);
+        var b = RandomComplex(N, 1, seed: 45);
+
+        var y = MatrixExponentialAction.Expmv(
+            new ApplyOnlyComplexOperator(a), b.ReadOnlyView, 1.0, ComplexOneNorm(a));
+
+        double before = ColumnTwoNorm(b, 0);
+        Assert.True(Math.Abs(ColumnTwoNorm(y, 0) - before) <= Tolerance * before);
+    }
+
+    /// <summary>
+    /// An operator reports whatever order it likes, and twice that order sizes
+    /// the real representation. An order whose double does not fit an int must
+    /// be an argument error, checked before anything is sized from it -- not an
+    /// OverflowException from the checked arithmetic, which is the wrong
+    /// diagnosis for a bad argument.
+    /// </summary>
+    [Fact]
+    public void MatrixFreeRejectsAnOrderWhoseRealRepresentationCannotExist()
+    {
+        var b = RandomComplex(4, 1, seed: 46);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => MatrixExponentialAction.Expmv(
+            new HostileOrderOperator(int.MaxValue / 2 + 1), b.ReadOnlyView, 1.0, 1.0));
+    }
+
+    [Theory]
+    [InlineData(-1.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void MatrixFreeRejectsAnUnusableNormBound(double bound)
+    {
+        var a = Matrix.Identity<Complex>(4);
+        var b = RandomComplex(4, 1, seed: 47);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => MatrixExponentialAction.Expmv(
+            new ApplyOnlyComplexOperator(a), b.ReadOnlyView, 1.0, bound));
+    }
+
+    [Fact]
+    public void MatrixFreeRejectsMismatchedRowsAndNull()
+    {
+        var a = Matrix.Identity<Complex>(4);
+        var b = RandomComplex(5, 1, seed: 48);
+
+        Assert.Throws<ArgumentException>(() => MatrixExponentialAction.Expmv(
+            new ApplyOnlyComplexOperator(a), b.ReadOnlyView, 1.0, 1.0));
+        Assert.Throws<ArgumentNullException>(() => MatrixExponentialAction.Expmv(
+            (ILinearOperator<Complex>)null!, b.ReadOnlyView, 1.0, 1.0));
+    }
+
     // ---- degenerate shapes and arguments ------------------------------------
 
     [Fact]
@@ -496,6 +596,38 @@ public class ComplexExponentialTests
     }
 
     // ---- the oracle and helpers ---------------------------------------------
+
+    /// <summary>
+    /// A complex operator that exposes nothing but Apply. It has no adjoint to
+    /// call, so if the matrix-free overload ever needed one this would not
+    /// compile.
+    /// </summary>
+    private sealed class ApplyOnlyComplexOperator(Matrix<Complex> a) : ILinearOperator<Complex>
+    {
+        public int Order => a.Rows;
+
+        public void Apply(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y)
+        {
+            for (int j = 0; j < x.Columns; j++)
+            {
+                for (int i = 0; i < a.Rows; i++)
+                {
+                    Complex sum = Complex.Zero;
+                    for (int k = 0; k < a.Columns; k++) sum += a[i, k] * x[k, j];
+                    y[i, j] = sum;
+                }
+            }
+        }
+    }
+
+    /// <summary>An operator that reports an order it has no storage for, and must never be applied.</summary>
+    private sealed class HostileOrderOperator(int order) : ILinearOperator<Complex>
+    {
+        public int Order => order;
+
+        public void Apply(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) =>
+            throw new InvalidOperationException("Apply must not be reached: the order should have been rejected.");
+    }
 
     /// <summary>
     /// exp(A) by scaling and squaring a truncated Taylor series, entirely in

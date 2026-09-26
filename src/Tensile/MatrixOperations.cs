@@ -9,19 +9,23 @@ namespace Tensile;
 /// Every method here has a counterpart on <see cref="Workspace"/> or an
 /// <c>...InPlace</c> form that writes into storage the caller already owns.
 /// This layer is the convenient one, not the efficient one — a loop that calls
-/// <see cref="Multiply"/> allocates a matrix per iteration.
+/// <see cref="Multiply(Matrix{double}, ReadOnlyMatrixView{double}, Workspace)"/>
+/// allocates a matrix per iteration.
 ///
-/// Arithmetic is supplied for <see cref="double"/> only. The extension target
-/// is the closed type <c>Matrix&lt;double&gt;</c> rather than an open
-/// <c>Matrix&lt;T&gt;</c>, so adding a numeric type later adds overloads
-/// without changing any signature here.
+/// Arithmetic is supplied for <see cref="double"/>, and for
+/// <see cref="System.Numerics.Complex"/> where it exists so far (products,
+/// in <c>MatrixOperations.Complex.cs</c>). The extension targets are closed
+/// types -- <c>Matrix&lt;double&gt;</c>, <c>Matrix&lt;Complex&gt;</c> --
+/// rather than an open <c>Matrix&lt;T&gt;</c>, so adding a numeric type adds
+/// overloads without changing any signature here, and a type with no
+/// arithmetic fails to compile rather than at run time.
 ///
 /// No method here touches a pointer, and none could: this assembly compiles
 /// with unsafe code disallowed. Anything that needs one hands a view to the
 /// kernel assembly's entry seam, which pins it for exactly the duration of a
 /// call.
 /// </summary>
-public static class MatrixOperations
+public static partial class MatrixOperations
 {
     /// <summary>A*B, as a new matrix.</summary>
     /// <param name="a">Left operand, m x k.</param>

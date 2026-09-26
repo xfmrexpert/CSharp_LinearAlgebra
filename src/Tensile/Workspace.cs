@@ -26,7 +26,7 @@ namespace Tensile;
 /// disposable and never were a lifetime risk through this type, since it holds
 /// no reference to them between calls.
 /// </summary>
-public sealed class Workspace : IDisposable
+public sealed partial class Workspace : IDisposable
 {
     private enum Kernel { Avx512, Avx2, Scalar }
 

@@ -444,8 +444,54 @@ have.
 
 ## Complex matrices
 
-`Expm` and `Expmv` accept `Matrix<Complex>` (`System.Numerics.Complex`) with the
-same call shape as the real ones:
+### Products
+
+`Matrix<Complex>` (`System.Numerics.Complex`) multiplies with the same call
+shapes as the real type. Complex scalars have no compile-time constant form, so
+the scaled accumulation is a separate overload rather than optional arguments:
+
+```csharp
+var c = a.Multiply(b);                                   // A B
+a.MultiplyInto(b, c.View);                               // c := A B
+a.MultiplyInto(b, c.View, alpha, beta);                  // c := beta c + alpha A B
+workspace.Multiply(a.ReadOnlyView, b.ReadOnlyView, c.View, alpha, beta);
+```
+
+These are native, not embedded: the **4M method**, four real products on the
+workspace's own kernel and dispatch — Re(AB) = ArBr − AiBi, Im(AB) = ArBi + AiBr.
+That is exactly the flop count of a conventional complex product, and it runs
+on the real GEMM that is at parity with BLIS. The destination is written only
+after all four products succeed, so a failure leaves it untouched.
+
+It is 4M and not the cheaper 3M (three products) because 3M's error in the
+imaginary part is relative to the whole magnitude of the operands, so a small
+imaginary part is swamped. Measured on operands whose imaginary parts are a
+factor ρ smaller than their real parts:
+
+| ρ | 4M, relative error of Im(AB) | 3M, relative error of Im(AB) |
+| --- | --- | --- |
+| 10³ | 6e-14 | 9e-11 |
+| 10⁶ | 5e-14 | 1e-7 |
+| 10⁹ | 3e-14 | 1e-4 |
+| 10¹² | 9e-14 | 0.19 |
+
+This matters for line models specifically: in a product such as
+ZY = (R + jωL)(G + jωC), the loss terms ω(LG + RC) land in the small imaginary
+part, next to a dominant −ω²LC. 3M would lose the damping first.
+
+The cost of 4M is temporaries — real and imaginary copies of both operands and
+of the product, allocated on every call. From n≈512 up that is a modest
+overhead (4M measured at 4.7–4.9× one real product on a development container,
+against an ideal 4.0, and about 1.6× faster than the embedded route). **At
+small n it dominates**: at n=128 the same measurement put 4M at 9.1×, slower
+than embedding. Removing the per-call allocation is an open item, pending a
+measurement on the verification machine; `ComplexGemmBenchmarks` is the
+instrument.
+
+### Exponentials
+
+`Expm` and `Expmv` accept `Matrix<Complex>` with the same call shape as the
+real ones:
 
 ```csharp
 var e = z.Expm();                          // exp(Z)
@@ -456,9 +502,9 @@ In the standard multiconductor-line formulation this is the chain-parameter
 matrix Φ(ℓ) = exp(Mℓ), with M = [[0, −Z(ω)], [−Y(ω), 0]] complex at each
 frequency, so a frequency sweep is one of these per frequency.
 
-**How they are computed today.** Nothing else in the library does complex
-arithmetic yet — no complex GEMM, LU or norm estimator — so these run the real
-algorithms on the real representation of the complex matrix: X + iY becomes
+**How they are computed today.** There is no complex LU or norm estimator
+yet, so these run the real algorithms on the real representation of the
+complex matrix: X + iY becomes
 the 2n×2n matrix [[X, −Y], [Y, X]], which the exponential commutes with. The
 answer is the real algorithm's, verified against an independent complex Taylor
 series and against invariants such as exp(iH) being unitary for Hermitian H.
@@ -507,9 +553,9 @@ exactly, and apply the operator without it.
 
 ## Not here yet
 
-- **Complex arithmetic beyond the exponentials** — complex GEMM, LU, solves and
-  norm estimation. The exponentials above reach complex matrices through a real
-  representation instead.
+- **Complex LU, solves and norm estimation.** Complex products are native;
+  the exponentials above still reach complex matrices through a real
+  representation until these exist.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
 - **Arithmetic for any type but `double`.** Storage is generic; operations are

@@ -41,10 +41,11 @@ A library plus tests, benchmarks and a diagnostics tool, `net10.0`,
 column-major throughout, unit row stride. `Matrix<T>` is generic over
 `unmanaged, INumberBase<T>`, so storage, views and the structure vocabulary
 already work for any numeric type; arithmetic is double-only and lives in
-extensions on the closed `Matrix<double>`, so adding a type is additive. The
-one exception is the complex exponentials (`Expm`/`Expmv` on
-`Matrix<Complex>`), which reach the real code through `ComplexEmbedding`
-rather than through any complex arithmetic of their own.
+extensions on the closed `Matrix<double>`, so adding a type is additive.
+Complex is arriving one primitive at a time: complex products are native (the
+4M method over the real GEMM, `ComplexKernels`), and the complex exponentials
+(`Expm`/`Expmv` on `Matrix<Complex>`) still reach the real code through
+`ComplexEmbedding` until complex LU and a complex norm estimator exist.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
@@ -85,7 +86,9 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
 | `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
 | `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
-| `src/Tensile/*.Complex.cs` | The complex `Expm`/`Expmv`, as partials of the real classes so a native implementation can replace the body without moving the signature |
+| `src/Tensile/*.Complex.cs` | The complex public surface (`Expm`, `Expmv`, `Multiply` on `Workspace` and `MatrixOperations`), as partials of the real classes, so an implementation can change behind a signature that does not move |
+| `src/Tensile/ElementKernels.cs` | `IElementKernels<T>`: the static-abstract seam a generic algorithm binds its arithmetic through (products, magnitudes, exact norms), and `DoubleKernels` over the existing real path |
+| `src/Tensile/ComplexKernels.cs` | `ComplexKernels`: complex products by 4M over the real GEMM, complex magnitudes and norms |
 | `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back, and `EmbeddedOperator` for matrix-free complex operators. Today's complex implementation and, permanently, the complex oracle |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
@@ -98,8 +101,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1071 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
-| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms |
+| `tests/Tensile.Tests/` | xunit.v3, 1154 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
@@ -913,6 +916,26 @@ well- and ill-conditioned inputs.
   than reading one block pair, because the exact answer lies in that subspace
   and orthogonal projection can therefore only reduce the error.
 
+- **Complex products are 4M, and the reason is the damping.** 3M saves a
+  quarter of the flops by forming Im(AB) as (Ar + Ai)(Br + Bi) - ArBr - AiBi,
+  a difference of large terms, so its error in the imaginary part is
+  relative to the operands' whole magnitude. In a line model the product
+  ZY = (R + jwL)(G + jwC) carries its loss terms w(LG + RC) in exactly that
+  small imaginary part, beside a dominant -w^2 LC, so 3M would lose the
+  damping before anything else — the one quantity a transient model exists to
+  get right. (The ZY argument is algebra, not a measurement on line data; the
+  accuracy table in the complex roadmap is measured.)
+
+- **Arithmetic reaches generic algorithms through a static-abstract
+  interface per element type, not through `INumberBase<T>`.** An algorithm
+  takes `TKernels : struct, IElementKernels<T>` beside `T`, and the JIT
+  specialises it per struct, so the calls are direct — the same device as
+  `IMicroKernel` and `IMatrixStructure`. `INumberBase<T>` cannot do the job
+  alone because every algorithm here is steered by real quantities (norms,
+  thresholds, scaling), and for `Complex` it has no operation that returns
+  one. Members are added only together with an implementation for every
+  element type, so the interface is shaped by more than one case.
+
 ---
 
 # Open items
@@ -993,6 +1016,19 @@ well- and ill-conditioned inputs.
   n=128/512/2048 — noise around zero, with the shipped path executing last and
   hottest in every group. See "What the secure-by-design migration cost"
   above. The section 9 guardrail is satisfied.
+- **4M allocates its temporaries per call.** Six real matrices — real and
+  imaginary parts of A, B and the product — freshly allocated, zeroed, on the
+  pinned object heap, on every complex product. Measured on the development
+  container this makes 4M slower than the embedded route at n=128 (9.1x a
+  real GEMM against 7.4x) while it wins by ~1.6x from n=512 up. Two fixes, in
+  increasing cost: keep the split buffers in the `Workspace` beside its
+  packing buffers (its lock is reentrant, so 4M can hold it across all four
+  products), which removes the allocation and the zeroing; or split inside
+  the packing routines (BLIS's 1M method), which removes the temporaries
+  altogether. Neither is written, deliberately: the container numbers are
+  noisy, and `ComplexGemmBenchmarks` on the 12700H should decide it. It
+  matters for the target application, whose 2N sits in the few-hundreds
+  where this overhead is largest.
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small
@@ -1073,10 +1109,36 @@ a documented public API, and structure-typed dispatch. What remains:
       rather than guessed from one. The interface change also gave the
       matrix-free complex `Expmv` the operator type it was waiting on, and
       that overload is in.
-   2. Complex GEMM via 4M over the real kernel — four real GEMMs, 8n^3 real
-      flops, exactly the complex count, reusing the verified kernel and the
-      codegen gate. **Not 3M**: it is 25% cheaper but not componentwise stable,
-      and a small component (in a lossy line, often the damping) can be lost.
+   2. ~~Complex GEMM via 4M.~~ *Done.* Four real GEMMs on the workspace's
+      own kernel and dispatch, 8n^3 real flops — exactly the complex count —
+      with no new micro-kernel and no new unsafe code. Verified per
+      micro-kernel, serial and threaded, against a componentwise error bound
+      of the conventional product's form. **Not 3M**, now measured rather
+      than argued: with imaginary parts a factor rho below the real parts,
+      4M holds Im(AB) to 3e-14 - 9e-14 relative error at every rho from 1e3
+      to 1e12, while 3M's error grows with rho — 9e-11, 1e-7, 1e-4, 0.19. The
+      suite pins it both ways: the small-component test passes for 4M, and a
+      companion test computes 3M and asserts it fails the same bound.
+
+      `IElementKernels<T>` went in with it, with `DoubleKernels` and
+      `ComplexKernels` implementing products, `Magnitude` (a real modulus —
+      the member generic math cannot supply, since `INumberBase<Complex>.Abs`
+      returns a `Complex`) and the exact norms. One generic contract test runs
+      against both. LU and the estimator's products join it in steps 3 and 4.
+
+      **Measured only on the development container so far** (BDN short job,
+      single-threaded workspace, StdDev up to 17%, so read the within-run
+      ratios, not the times): 4M over one real GEMM of the same order reads
+      4.88 at n=512 and 4.65 at n=1024 against an ideal 4.0, and the
+      embedded route reads 7.74 and 7.65 against an ideal 8.0 — so 4M is
+      about 1.6x faster than embedding there. **At n=128 it inverts: 4M reads
+      9.13 against embedding's 7.37.** The mechanism is in the one exact
+      column of that report: the real path allocates nothing per call (the
+      workspace owns its packing buffers), while 4M allocates six zeroed
+      temporaries on the pinned object heap every call — 788 KB at n=128,
+      12.6 MB at 512 — and at small n that dominates. See "4M allocates its
+      temporaries per call" under open items; the 12700H measurement comes
+      first.
    3. Complex LU and solves. LAPACK's `izamax` pivots on |Re| + |Im|, not |z|;
       match it to keep pivot sequences comparable with `zgetrf`, as
       `Pivoting` does for the real case.
@@ -1189,6 +1251,13 @@ Guidance that has already been paid for once:
   `ExpmDiagnostics` exists and why `EveryPadeDegreeIsReached` asserts the set
   of degrees observed, not just that the answers were right. Finding 10,
   applied one level down.
+- **Adding a fuzz operation remaps the corpus.** The harness dispatches on
+  `op % N`, so a new case changes the meaning of every op byte at or above
+  the old N. Before case 14 (the complex surface) went in, a `--self-check`
+  run was instrumented to log every op byte the shipped seeds execute: all
+  were below 14, so every seed still does exactly what it did. That check has
+  to be repeated before the next case, or a hand-built seed like
+  `empty-huge-columns` can silently stop targeting its bug.
 - **A `Skip` that is really an early `return` is a lie.** This is why the suite
   is on xunit.v3, which has `Assert.Skip`.
 - **The codegen gate needs a single process.** BenchmarkDotNet spawns a child

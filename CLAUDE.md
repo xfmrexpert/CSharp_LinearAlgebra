@@ -43,9 +43,11 @@ column-major throughout, unit row stride. `Matrix<T>` is generic over
 already work for any numeric type; arithmetic is double-only and lives in
 extensions on the closed `Matrix<double>`, so adding a type is additive.
 Complex is arriving one primitive at a time: complex products are native (the
-4M method over the real GEMM, `ComplexKernels`), and the complex exponentials
-(`Expm`/`Expmv` on `Matrix<Complex>`) still reach the real code through
-`ComplexEmbedding` until complex LU and a complex norm estimator exist.
+4M method over the real GEMM, `ComplexKernels`), so are LU and its solves (one
+blocked algorithm written over the element type, `BlockedLu`, behind a single
+`LuDecomposition<T>`), and the complex exponentials (`Expm`/`Expmv` on
+`Matrix<Complex>`) still reach the real code through `ComplexEmbedding` until
+a complex norm estimator exists.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
@@ -65,7 +67,7 @@ exists in full, as three assemblies:
 
 | Layer | Assembly / namespace | Holds |
 | --- | --- | --- |
-| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition`, `Workspace`, the fluent operations, `ILinearOperator<T>`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` (real and complex) |
+| Ergonomic | `Tensile` (public, no unsafe) | `Matrix<T>`, `MatrixView<T>`, structures, `LuDecomposition<T>` (and the generic `BlockedLu` behind its complex path), `Workspace`, the fluent operations, `ILinearOperator<T>`, `NormEstimate`, `MatrixExponential`, `MatrixExponentialAction` (real and complex) |
 | Kernels | `Tensile.Kernels` (all internal, unsafe) | Micro-kernels, packing, the GEMM drivers, LU, triangular solves, the streamed column/panel primitives, exact norms, the `KernelEntry` seam |
 | Interop | `Tensile.Interop.Blis` (separate package, public over views) | The optional BLIS binding, for benchmarks; the only native loading anywhere |
 
@@ -94,7 +96,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers + complex split buffers, internally locked; `Gate`/`MultiplyHeld` for an operation that must hold the lock across several products |
-| `src/Tensile/LuDecomposition.cs` | Owning factorization; captures ||A||_1 before overwriting A |
+| `src/Tensile/LuDecomposition.cs` | `LuDecomposition<T>`, the owning factorization for every element type; captures ||A||_1 before overwriting A; the `LuSolver<T>` seam that binds the element type to its solves at the factory |
+| `src/Tensile/BlockedLu.cs` | LU with partial pivoting written once over `T`/`IElementKernels<T>`: complex's only path, and for double the oracle the kernel LU's pivots must match |
 | `src/Tensile/MatrixOperations.cs` | Fluent extensions on `Matrix<double>` and the structured solves |
 | `src/Tensile.Kernels/KernelEntry.cs` | The single seam where spans are pinned and become pointers; restates every shape precondition |
 | `src/Tensile.Kernels/Operand.cs` | `Operand` / `Target`: span + shape, length-checked on construction |
@@ -102,7 +105,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1171 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1557 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -927,6 +930,24 @@ well- and ill-conditioned inputs.
   get right. (The ZY argument is algebra, not a measurement on line data; the
   accuracy table in the complex roadmap is measured.)
 
+- **One `LuDecomposition<T>`, two factorizations behind it.** The type is
+  generic and replaced the real-only one outright; the factorization is not
+  unified. Real LU stays on the pointer-based kernel path, which is tuned and
+  measured, and complex runs `BlockedLu`, the same blocked algorithm written
+  once over `IElementKernels<T>` in safe code, its trailing updates 4M
+  products. The element type is bound to its solves where it is known — the
+  `FactorLu` overload hands the decomposition a `LuSolver<T>` — so the
+  generic type never tests what `T` is. A decomposition can be named for any
+  `T` but obtained only for `double` and `Complex`, because only they have a
+  factory; members that need more than the factors (`ReciprocalCondition`,
+  which needs a norm estimator) are extensions on the closed types that have
+  one, so asking for the missing one is a compile error. `BlockedLu` for
+  double is kept as the kernel's oracle: same pivot rule, same arithmetic
+  (the kernel's axpy is `y + a*x`, no FMA), so the tests hold it to exactly
+  the kernel's pivots — far stronger than a residual. `SolveTransposed`
+  became `SolveAdjoint` on the decomposition in the same change, for the
+  reason the operator interface did.
+
 - **Arithmetic reaches generic algorithms through a static-abstract
   interface per element type, not through `INumberBase<T>`.** An algorithm
   takes `TKernels : struct, IElementKernels<T>` beside `T`, and the JIT
@@ -1050,6 +1071,15 @@ well- and ill-conditioned inputs.
   the 12700H numbers, pinned at `--iterationCount 31`, and whether the cap is
   right — it is a memory-for-speed policy, set to cover the target
   application's few-hundred order, not measured.
+- **Complex LU is unmeasured.** No benchmark, and its block size is the real
+  factorization's measured default, taken on trust: the complex panel is
+  managed code, slower per flop than the real kernel's, which may move the
+  optimum. Its trailing updates are 4M products and so inherit the
+  split-buffer cap: a trailing block over 2^21 split elements allocates per
+  update.
+- **The triangular structure solves are real-only**, and still say
+  `SolveTransposed` where the decomposition now says `SolveAdjoint`. When
+  they gain a complex path the rename should follow.
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small
@@ -1157,9 +1187,17 @@ a documented public API, and structure-typed dispatch. What remains:
       it reads 4.43 at n=128 and 4.01 at n=512. See "4M allocates its
       temporaries per call" under open items, now closed for sizes under the
       retention cap; the 12700H measurement is still to come.
-   3. Complex LU and solves. LAPACK's `izamax` pivots on |Re| + |Im|, not |z|;
-      match it to keep pivot sequences comparable with `zgetrf`, as
-      `Pivoting` does for the real case.
+   3. ~~Complex LU and solves.~~ *Done.* `LuDecomposition<T>` replaces the
+      real-only type; complex factors through `BlockedLu`, the blocked
+      algorithm written once over the element type, pivoting on |Re| + |Im|
+      as `izamax` does (a new `IElementKernels<T>.PivotMagnitude`, beside
+      `Conjugate` for the adjoint solve). Verified four ways: complex
+      residuals per micro-kernel; the double instantiation choosing exactly
+      the kernel LU's pivots on every shape; a real matrix factored as
+      complex pivoting exactly as the real kernel does; and solves agreeing
+      with a real solve on the embedding, and |det|^2 with the embedding's
+      determinant. **What is not done**: no benchmark, block size unmeasured,
+      and no complex `ReciprocalCondition` until step 4.
    4. Complex `normest1`: A^H for A^T, unit-modulus signs x/|x| for +-1, and
       no parallel-column resampling, which only applies to real sign vectors.
    5. Native `expm`/`expmv`, verified against the embedding.

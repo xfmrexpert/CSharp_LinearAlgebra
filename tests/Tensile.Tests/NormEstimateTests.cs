@@ -309,7 +309,7 @@ public abstract class ConditionContract<TCase> where TCase : struct, IKernelCase
     [Fact]
     public void IdentityIsPerfectlyConditioned()
     {
-        LuDecomposition lu = Matrix.Identity<double>(40).FactorLu(blockSize: 8, _workspace);
+        LuDecomposition<double> lu = Matrix.Identity<double>(40).FactorLu(blockSize: 8, _workspace);
 
         Assert.Equal(1.0, lu.ReciprocalCondition(), 12);
     }
@@ -330,7 +330,7 @@ public abstract class ConditionContract<TCase> where TCase : struct, IKernelCase
     public void TracksTheExactReciprocalCondition(int n)
     {
         Matrix<double> a = RandomDiagonallyDominant(n, seed: n * 3);
-        LuDecomposition lu = a.FactorLu(blockSize: 8, _workspace);
+        LuDecomposition<double> lu = a.FactorLu(blockSize: 8, _workspace);
 
         // A^-1 by solving against the identity.
         Matrix<double> inverse = lu.Solve(Matrix.Identity<double>(n));
@@ -378,7 +378,7 @@ public abstract class ConditionContract<TCase> where TCase : struct, IKernelCase
         Matrix<double> a = RandomDiagonallyDominant(n, seed: 77);
         for (int i = 0; i < n; i++) a[i, 4] = 0.0;
 
-        LuDecomposition lu = a.FactorLu(blockSize: 4, _workspace);
+        LuDecomposition<double> lu = a.FactorLu(blockSize: 4, _workspace);
 
         Assert.True(lu.IsSingular);
         Assert.Equal(0.0, lu.ReciprocalCondition());

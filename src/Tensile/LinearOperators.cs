@@ -169,16 +169,18 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
 /// The inverse of an LU-factored matrix, as an operator: applying it solves
 /// rather than multiplying. This is what turns the 1-norm estimator into a
 /// condition estimator, since cond_1(A) = ||A||_1 * ||A^-1||_1 and the second
-/// factor is exactly what the estimator can reach without forming A^-1.
+/// factor is exactly what the estimator can reach without forming A^-1. Its
+/// adjoint is (A^-1)^H = (A^H)^-1, which is the adjoint solve.
 /// </summary>
-public sealed class LuInverseOperator : IAdjointOperator<double>
+/// <typeparam name="T">The element type of the factorization.</typeparam>
+public sealed class LuInverseOperator<T> : IAdjointOperator<T> where T : unmanaged, INumberBase<T>
 {
-    private readonly LuDecomposition _lu;
+    private readonly LuDecomposition<T> _lu;
 
     /// <summary>Wrap a factorization so the estimator can probe A^-1.</summary>
     /// <param name="lu">A square factorization.</param>
     /// <exception cref="ArgumentException">The factorization is not square.</exception>
-    public LuInverseOperator(LuDecomposition lu)
+    public LuInverseOperator(LuDecomposition<T> lu)
     {
         ArgumentNullException.ThrowIfNull(lu);
 
@@ -193,7 +195,7 @@ public sealed class LuInverseOperator : IAdjointOperator<double>
 
     /// <inheritdoc/>
     /// <exception cref="InvalidOperationException">The factorization has an exactly zero pivot.</exception>
-    public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    public void Apply(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         CopyInto(x, y);
         _lu.SolveInPlace(y);
@@ -201,14 +203,14 @@ public sealed class LuInverseOperator : IAdjointOperator<double>
 
     /// <inheritdoc/>
     /// <exception cref="InvalidOperationException">The factorization has an exactly zero pivot.</exception>
-    public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    public void ApplyAdjoint(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         CopyInto(x, y);
-        _lu.SolveTransposedInPlace(y);
+        _lu.SolveAdjointInPlace(y);
     }
 
     /// <summary>The solves work in place, so the right-hand side has to arrive in Y.</summary>
-    private static void CopyInto(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    private static void CopyInto(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         if (y.Rows != x.Rows || y.Columns != x.Columns)
         {

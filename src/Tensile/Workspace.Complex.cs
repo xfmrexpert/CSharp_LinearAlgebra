@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using Tensile.Kernels;
 
 namespace Tensile;
 
@@ -59,4 +60,46 @@ public sealed partial class Workspace
         Complex alpha,
         Complex beta) =>
         ComplexKernels.Multiply(this, a, b, c, alpha, beta);
+
+    /// <summary>
+    /// Factor a complex <paramref name="a"/> in place as P*A = L*U, without
+    /// copying; the complex counterpart of
+    /// <see cref="FactorLu(Matrix{double}, int)"/>, with the same ownership
+    /// rule: <paramref name="a"/> must not be written afterwards while the
+    /// decomposition is in use.
+    ///
+    /// Pivoting maximises |Re| + |Im|, as LAPACK's <c>zgetrf</c> does, so a
+    /// pivot sequence can be compared with one produced there. The trailing
+    /// updates are 4M products on this workspace's kernel and dispatch; the
+    /// panels and triangular solves are the same algorithm in safe code.
+    /// </summary>
+    /// <param name="a">The square or rectangular matrix to factor. Overwritten.</param>
+    /// <param name="blockSize">Panel width; zero selects the default, which is the real factorization's measured default and has not been measured for complex.</param>
+    /// <exception cref="ObjectDisposedException">The workspace has been disposed. <paramref name="a"/> is untouched.</exception>
+    public LuDecomposition<Complex> FactorLu(Matrix<Complex> a, int blockSize = 0) =>
+        FactorLuManaged<Complex, ComplexKernels>(a, blockSize);
+
+    /// <summary>
+    /// The generic factorization for any element type with kernels. Complex
+    /// uses it as its only path; the tests instantiate it for double too, as
+    /// the oracle that the kernel factorization's pivots must match.
+    /// </summary>
+    internal LuDecomposition<T> FactorLuManaged<T, TKernels>(Matrix<T> a, int blockSize)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
+    {
+        ArgumentNullException.ThrowIfNull(a);
+
+        // Before anything is written: the first place the factorization itself
+        // would notice is its first trailing update, by which point the first
+        // panel has already been overwritten.
+        ThrowIfDisposed();
+
+        // Captured before the factorization overwrites the matrix.
+        double oneNorm = TKernels.OneNorm(a.ReadOnlyView);
+
+        LuFactorization factorization = BlockedLu.Factor<T, TKernels>(this, a.View, blockSize);
+
+        return new LuDecomposition<T>(a, factorization, oneNorm, ManagedLuSolver<T, TKernels>.Instance);
+    }
 }

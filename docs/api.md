@@ -131,7 +131,7 @@ say the rest is zero, and it cannot: LU packs `L` and `U` into one array, so the
 triangle a structure ignores routinely holds the other factor.
 
 ```csharp
-LuDecomposition lu = a.FactorLu();
+LuDecomposition<double> lu = a.FactorLu();
 
 lu.Lower.SolveInPlace(x.View);   // reads strictly below the diagonal
 lu.Upper.SolveInPlace(x.View);   // reads the diagonal and above
@@ -154,15 +154,28 @@ The safest structured matrices are the ones you never assert: `lu.Lower` and
 ## Factorizations
 
 ```csharp
-LuDecomposition lu = a.FactorLu();     // a is not modified
+LuDecomposition<double> lu = a.FactorLu();     // a is not modified
 
 Matrix<double> x  = lu.Solve(b);
-Matrix<double> xt = lu.SolveTransposed(b);
+Matrix<double> xa = lu.SolveAdjoint(b);         // Aᴴ x = b; Aᵀ for a real matrix
 
-bool broken   = lu.IsSingular;          // an exactly zero pivot
+bool broken   = lu.IsSingular;                  // an exactly zero pivot
 double rcond  = lu.ReciprocalCondition();
 double det    = lu.Determinant();
 ```
+
+`LuDecomposition<T>` is one type for every element type the library factors —
+`double` and `Complex` (see [Complex matrices](#complex-matrices)). It has no
+public constructor; it comes only from `FactorLu`, which exists only for element
+types with arithmetic. `ReciprocalCondition` is an extension on
+`LuDecomposition<double>` alone until the complex norm estimator lands, so on a
+complex factorization it is a compile error rather than a run-time one.
+
+The adjoint solve replaced `SolveTransposed` when the type became generic. For a
+real factorization they are the same solve; for a complex one the transpose is
+rarely what is wanted and the conjugate transpose is what an adjoint operator
+and the norm estimator need. (The triangular structure solves below are still
+real-only and still say `SolveTransposed`.)
 
 `FactorLu` copies, so your matrix survives, and the result keeps its own
 storage alive for as long as you hold it. When the copy matters —
@@ -170,7 +183,7 @@ it is O(n²) against an O(n³) factorization, so it rarely does — factor in
 place through a workspace:
 
 ```csharp
-LuDecomposition lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
+LuDecomposition<double> lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
 ```
 
 The decomposition then shares `a`'s storage, which is why this takes a
@@ -282,14 +295,15 @@ same, which is why this was once called `ApplyTranspose`. For a complex one the
 transpose is the wrong operation, and supplying it would give an estimator that
 is quietly wrong rather than one that fails.
 
-Two implementations ship, both `IAdjointOperator<double>`. `DenseMatrixOperator(a, power)`
-applies `Aᵖ` by `p` successive panel products without forming the power;
-`LuInverseOperator(lu)` applies `A⁻¹` by solving. Both are what `NormEstimate`
+Two implementations ship. `DenseMatrixOperator(a, power)`, an
+`IAdjointOperator<double>`, applies `Aᵖ` by `p` successive panel products
+without forming the power; `LuInverseOperator<T>(lu)` applies `A⁻¹` by solving,
+and its adjoint by the adjoint solve, for either element type. Both are what `NormEstimate`
 needs:
 
 ```csharp
 double est   = NormEstimate.Of(new DenseMatrixOperator(a, power: 3)).Value;   // ≈ ‖A³‖₁
-double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator
+double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator<double>
 ```
 
 `NormEstimate.Of` is Higham and Tisseur's block 1-norm estimator, the algorithm
@@ -495,6 +509,35 @@ than the embedded route. Those are noisy figures from a short job; the
 verification-machine measurement is outstanding. `ComplexGemmBenchmarks` is the
 instrument.
 
+### LU and solves
+
+Complex matrices factor and solve with the same calls as real ones:
+
+```csharp
+LuDecomposition<Complex> lu = z.FactorLu();   // z is not modified
+Matrix<Complex> x = lu.Solve(b);              // Z x = b
+Matrix<Complex> y = lu.SolveAdjoint(b);       // Zᴴ y = b, the conjugate transpose
+Complex det = lu.Determinant();
+
+Matrix<Complex> x2 = z.Solve(b);              // factor and discard
+```
+
+Partial pivoting picks the entry with the largest |Re| + |Im|, not the largest
+modulus. That is LAPACK's `izamax` rule, so a pivot sequence can be compared
+with one from `zgetrf`; it is within √2 of the modulus, so it carries the same
+stability, and it needs no square root.
+
+The algorithm is the real one, blocked the same way, written once over the
+element type. Its trailing updates — nearly all of the work — are 4M products on
+the workspace's real GEMM. The panels and triangular solves are safe managed
+code, slower per flop than the real kernel's but O(n²·nb) of the total. Two
+things it does not have yet:
+
+- **No condition estimate.** `ReciprocalCondition` is real-only until the
+  complex norm estimator exists.
+- **No measured block size.** The default is the real factorization's, which
+  was measured for real; whether complex wants a different one is open.
+
 ### Exponentials
 
 `Expm` and `Expmv` accept `Matrix<Complex>` with the same call shape as the
@@ -560,12 +603,13 @@ exactly, and apply the operator without it.
 
 ## Not here yet
 
-- **Complex LU, solves and norm estimation.** Complex products are native;
-  the exponentials above still reach complex matrices through a real
-  representation until these exist.
+- **Complex norm estimation and condition numbers.** Complex products, LU and
+  solves are native; the exponentials above still reach complex matrices
+  through a real representation until the norm estimator exists too.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
-- **Arithmetic for any type but `double`.** Storage is generic; operations are
-  not. Adding a type is additive and breaks no signature here.
+- **Arithmetic for any type but `double` and `Complex`.** Storage is generic;
+  operations exist for those two. LU is written once over the element type, so
+  a third type needs its element kernels, not a new factorization.
 - **In-place transpose**, and a transposed GEMM. The primitive layer has no
   transpose flags at all, by design.

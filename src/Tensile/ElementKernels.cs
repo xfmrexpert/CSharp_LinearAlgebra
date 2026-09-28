@@ -29,11 +29,9 @@ namespace Tensile;
 ///
 /// Members arrive as the algorithms that need them do, each with an
 /// implementation for every element type at once, so the interface is shaped
-/// by more than one case rather than guessed from one. LU and the norm
-/// estimator's products join it with complex LU and complex <c>normest1</c>.
-/// Note that pivoting will bring its own measure: LAPACK's <c>izamax</c>
-/// pivots on |Re| + |Im|, not on <see cref="Magnitude"/>, and matching it is
-/// what keeps pivot sequences comparable with <c>zgetrf</c>.
+/// by more than one case rather than guessed from one. LU brought
+/// <see cref="PivotMagnitude"/> and <see cref="Conjugate"/>; the norm
+/// estimator's needs join it with complex <c>normest1</c>.
 ///
 /// Internal: the public surface stays concrete, with overloads only for the
 /// element types that implement this, so an element type with no arithmetic
@@ -54,6 +52,19 @@ internal interface IElementKernels<T> where T : unmanaged, INumberBase<T>
 
     /// <summary>|x|, the modulus, as a real number.</summary>
     static abstract double Magnitude(T value);
+
+    /// <summary>
+    /// The measure partial pivoting maximises. For a real number it is |x|.
+    /// For a complex one it is |Re| + |Im|, not the modulus: that is what
+    /// LAPACK's <c>izamax</c> uses (its <c>cabs1</c>), and matching it keeps a
+    /// pivot sequence comparable with <c>zgetrf</c>'s. It is within a factor
+    /// of sqrt(2) of the modulus, so the growth bound of partial pivoting
+    /// survives, and it needs no square root.
+    /// </summary>
+    static abstract double PivotMagnitude(T value);
+
+    /// <summary>The complex conjugate; the identity for a real type. What turns a transpose into an adjoint.</summary>
+    static abstract T Conjugate(T value);
 
     /// <summary>||A||_1, the largest column sum of magnitudes. Exact, O(m*n).</summary>
     static abstract double OneNorm(ReadOnlyMatrixView<T> a);
@@ -81,6 +92,12 @@ internal readonly struct DoubleKernels : IElementKernels<double>
 
     /// <inheritdoc/>
     public static double Magnitude(double value) => Math.Abs(value);
+
+    /// <inheritdoc/>
+    public static double PivotMagnitude(double value) => Math.Abs(value);
+
+    /// <inheritdoc/>
+    public static double Conjugate(double value) => value;
 
     /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<double> a) => a.OneNorm();

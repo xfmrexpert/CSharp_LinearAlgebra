@@ -189,7 +189,7 @@ internal static class Script
 
                     case 10:
                     {
-                        LuDecomposition lu = a.FactorLu(reader.Int());
+                        LuDecomposition<double> lu = a.FactorLu(reader.Int());
                         _ = lu.Solve(b);
                         _ = lu.ReciprocalCondition(reader.Int());
                         _ = lu.Determinant();
@@ -214,10 +214,17 @@ internal static class Script
                     case 14:
                     {
                         // The complex surface: the 4M product, the exponentials
-                        // through the real embedding, and the action. Hostile
-                        // dimensions make most of these non-square and rejected,
-                        // which is the point; t stays in [-2, 2] so a square case
-                        // costs milliseconds rather than looking like a hang.
+                        // through the real embedding, the action, and LU with
+                        // its solves. Hostile dimensions make most of these
+                        // non-square and rejected, which is the point; t stays
+                        // in [-2, 2] so a square case costs milliseconds rather
+                        // than looking like a hang.
+                        //
+                        // LU reads nothing further from the input: a new read
+                        // here would shift every byte after it and change what
+                        // the complex-surface seed does. Its block size comes
+                        // from the dimensions instead, so small matrices still
+                        // take the blocked path.
                         var z = new Matrix<Complex>(reader.Dimension(), reader.Dimension());
                         FillComplex(z, reader.Byte());
                         double t = (reader.Small() - 128) / 64.0;
@@ -225,6 +232,13 @@ internal static class Script
                         _ = z.Multiply(z);
                         _ = z.Expm();
                         _ = z.Expmv(z.ReadOnlyView, t);
+
+                        // Last, because a singular z throws from the solves,
+                        // and anything after them would stop being reached.
+                        LuDecomposition<Complex> zlu = z.FactorLu(blockSize: 1 + (z.Rows % 4));
+                        _ = zlu.Determinant();
+                        _ = zlu.Solve(z);
+                        _ = zlu.SolveAdjoint(z);
                         break;
                     }
                 }

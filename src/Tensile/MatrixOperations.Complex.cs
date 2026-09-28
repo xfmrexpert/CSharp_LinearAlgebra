@@ -63,4 +63,41 @@ public static partial class MatrixOperations
 
         (workspace ?? Workspace.Shared).Multiply(a.ReadOnlyView, b, destination, alpha, beta);
     }
+
+    /// <summary>
+    /// Factor a complex matrix as P*A = L*U, leaving <paramref name="a"/>
+    /// untouched. The result owns a copy of the factors. Pivoting maximises
+    /// |Re| + |Im|, as <c>zgetrf</c> does.
+    /// </summary>
+    /// <param name="a">The matrix to factor. Not modified.</param>
+    /// <param name="blockSize">Panel width; zero selects the default.</param>
+    /// <param name="workspace">Buffers and kernel choice; null uses <see cref="Workspace.Shared"/>.</param>
+    public static LuDecomposition<Complex> FactorLu(
+        this Matrix<Complex> a, int blockSize = 0, Workspace? workspace = null)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+
+        return (workspace ?? Workspace.Shared).FactorLu(a.Clone(), blockSize);
+    }
+
+    /// <summary>
+    /// Solve A*X = B for a general square complex A, by LU with partial
+    /// pivoting. Factoring and discarding; to solve against several
+    /// right-hand sides in separate calls, factor once and reuse it.
+    /// </summary>
+    /// <param name="a">Coefficient matrix, square. Not modified.</param>
+    /// <param name="b">Right-hand sides, n x nrhs. Not modified.</param>
+    /// <param name="workspace">Buffers and kernel choice; null uses <see cref="Workspace.Shared"/>.</param>
+    /// <exception cref="ArgumentException">A is not square, or the shapes disagree.</exception>
+    /// <exception cref="InvalidOperationException">A has an exactly zero pivot.</exception>
+    public static Matrix<Complex> Solve(
+        this Matrix<Complex> a, ReadOnlyMatrixView<Complex> b, Workspace? workspace = null)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+
+        if (!a.IsSquare)
+            throw new ArgumentException($"Solve requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
+
+        return a.FactorLu(workspace: workspace).Solve(b);
+    }
 }

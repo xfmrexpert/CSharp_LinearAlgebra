@@ -294,7 +294,7 @@ public unsafe class MatrixApiTests
         Matrix<double> a = RandomDiagonallyDominant(16, seed: 13);
         Matrix<double> before = a.Clone();
 
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Assert.Equal(0.0, MaxDifference(a, before));
     }
@@ -305,7 +305,7 @@ public unsafe class MatrixApiTests
         const int n = 32;
 
         Matrix<double> a = RandomDiagonallyDominant(n, seed: 14);
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         for (int trial = 0; trial < 3; trial++)
         {
@@ -318,12 +318,12 @@ public unsafe class MatrixApiTests
     }
 
     [Fact]
-    public void SolveTransposedRecoversAKnownSolution()
+    public void SolveAdjointRecoversAKnownSolution()
     {
         const int n = 24;
 
         Matrix<double> a = RandomDiagonallyDominant(n, seed: 15);
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Matrix<double> expected = RandomMatrix(n, 2, seed: 16);
 
@@ -331,7 +331,7 @@ public unsafe class MatrixApiTests
         Matrix<double> transpose = Transpose(a);
         Matrix<double> b = transpose.Multiply(expected);
 
-        Matrix<double> x = lu.SolveTransposed(b);
+        Matrix<double> x = lu.SolveAdjoint(b);
 
         Assert.True(MaxDifference(x, expected) < 1e-9);
     }
@@ -350,7 +350,7 @@ public unsafe class MatrixApiTests
     {
         // [[1,2],[3,4]] has determinant -2.
         var a = Matrix.FromRows(new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } });
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Assert.Equal(-2.0, lu.Determinant(), 12);
     }
@@ -359,7 +359,7 @@ public unsafe class MatrixApiTests
     public void DeterminantOfIdentityIsOne()
     {
         Matrix<double> a = Matrix.Identity<double>(9);
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Assert.Equal(1.0, lu.Determinant(), 12);
     }
@@ -368,7 +368,7 @@ public unsafe class MatrixApiTests
     public void ReciprocalConditionIsOneForTheIdentity()
     {
         Matrix<double> a = Matrix.Identity<double>(32);
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Assert.Equal(1.0, lu.ReciprocalCondition(), 12);
     }
@@ -390,7 +390,7 @@ public unsafe class MatrixApiTests
                 for (int i = 0; i < n; i++)
                     a[i, j] = 1.0 / (i + j + 1);
 
-            LuDecomposition lu = a.FactorLu();
+            LuDecomposition<double> lu = a.FactorLu();
             double rcond = lu.ReciprocalCondition();
 
             Assert.True(rcond < previous, $"rcond at n={n} was {rcond:E3}, not below {previous:E3}");
@@ -413,7 +413,7 @@ public unsafe class MatrixApiTests
         Matrix<double> expected = a.FactorLu().Solve(b);
 
         Matrix<double> original = a.Clone();
-        LuDecomposition lu = Workspace.Shared.FactorLu(a);
+        LuDecomposition<double> lu = Workspace.Shared.FactorLu(a);
 
         // a now holds the packed factors, not the original.
         Assert.True(MaxDifference(a, original) > 1e-3);
@@ -424,7 +424,7 @@ public unsafe class MatrixApiTests
 
     [Fact]
     public void WorkspaceFactorLuRejectsNull() =>
-        Assert.Throws<ArgumentNullException>(() => Workspace.Shared.FactorLu(null!));
+        Assert.Throws<ArgumentNullException>(() => Workspace.Shared.FactorLu((Matrix<double>)null!));
 
     // ---- structure-typed dispatch -----------------------------------------
 
@@ -441,7 +441,7 @@ public unsafe class MatrixApiTests
         Matrix<double> a = RandomDiagonallyDominant(n, seed: 21);
         Matrix<double> b = RandomMatrix(n, 2, seed: 22);
 
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
         Matrix<double> expected = lu.Solve(b);
 
         // P*b, then forward substitution through L, then back substitution
@@ -510,7 +510,7 @@ public unsafe class MatrixApiTests
     public void PackedFactorsDoNotClaimTheirOtherTriangleIsZero()
     {
         Matrix<double> a = RandomDiagonallyDominant(12, seed: 29);
-        LuDecomposition lu = a.FactorLu();
+        LuDecomposition<double> lu = a.FactorLu();
 
         Assert.False(UpperTriangular.UnreferencedPartIsZero(lu.Upper.View));
         Assert.False(UnitLowerTriangular.UnreferencedPartIsZero(lu.Lower.View));

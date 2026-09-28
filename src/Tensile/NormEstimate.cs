@@ -14,7 +14,7 @@ public readonly record struct NormEstimateResult(double Value, int Iterations, i
 ///
 /// The estimate is obtained from a few products with A and A^T rather than from
 /// A's entries, which is what makes it useful twice over: with
-/// <see cref="LuInverseOperator"/> it gives a dgecon-equivalent condition
+/// <see cref="LuInverseOperator{T}"/> it gives a dgecon-equivalent condition
 /// estimate without forming A^-1, and with <see cref="DenseMatrixOperator"/>
 /// raised to a power it gives the ||A^k||^(1/k) quantities that Al-Mohy and
 /// Higham's scaling-and-squaring uses to choose its scaling parameter.
@@ -347,7 +347,7 @@ public static class NormEstimate
 
 /// <summary>
 /// Condition estimation in the 1-norm, the equivalent of LAPACK's dgecon.
-/// Reached through <see cref="LuDecomposition.ReciprocalCondition"/>, which
+/// Reached through <see cref="MatrixOperations.ReciprocalCondition"/>, which
 /// supplies the norm of the original matrix itself.
 /// </summary>
 internal static class Condition
@@ -361,11 +361,11 @@ internal static class Condition
     /// returned is an OVER-estimate of the reciprocal condition number: a small
     /// result reliably means ill-conditioning, a large one is weaker evidence
     /// of good conditioning. This is the same asymmetry dgecon has, and the
-    /// reason <see cref="LuDecomposition.PivotRatio"/> is not a substitute.
+    /// reason <see cref="LuDecomposition{T}.PivotRatio"/> is not a substitute.
     /// </summary>
     public static double ReciprocalOne(
         double normOfA,
-        LuDecomposition lu,
+        LuDecomposition<double> lu,
         int columns = NormEstimate.DefaultColumns,
         int maxIterations = NormEstimate.DefaultMaxIterations,
         int seed = NormEstimate.DefaultSeed)
@@ -374,7 +374,7 @@ internal static class Condition
 
         if (lu.IsSingular || normOfA == 0.0 || lu.Rows == 0) return 0.0;
 
-        var op = new LuInverseOperator(lu);
+        var op = new LuInverseOperator<double>(lu);
         double inverseNorm = NormEstimate.Of(op, columns, maxIterations, seed).Value;
 
         return inverseNorm == 0.0 ? 0.0 : 1.0 / (normOfA * inverseNorm);

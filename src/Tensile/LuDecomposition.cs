@@ -1,3 +1,4 @@
+using System.Numerics;
 using Tensile.Kernels;
 
 namespace Tensile;
@@ -19,19 +20,39 @@ namespace Tensile;
 /// diagonal, U on and above it. Each carries a structure in its type, so a
 /// solve against either dispatches to substitution at compile time and cannot
 /// be pointed at the wrong triangle.
+///
+/// One type for every element type the library factors, <see cref="double"/>
+/// and <see cref="Complex"/> today. There is no public constructor: a
+/// decomposition comes only from a <c>FactorLu</c> overload, and those exist
+/// only for element types with arithmetic, so a <c>LuDecomposition&lt;float&gt;</c>
+/// can be named but never obtained. What differs by element type sits behind
+/// the factory: a real factorization runs on the tuned kernel LU, a complex one
+/// on the same blocked algorithm written generically, whose trailing updates
+/// are 4M products. Members that need more than the factors -- condition
+/// estimation, which needs a norm estimator for the element type -- are
+/// extension methods on the closed types that have one, so asking for one that
+/// does not exist fails to compile.
 /// </summary>
-public sealed class LuDecomposition
+/// <typeparam name="T">The element type.</typeparam>
+public sealed class LuDecomposition<T> where T : unmanaged, INumberBase<T>
 {
-    private readonly Matrix<double> _factors;
+    private readonly Matrix<T> _factors;
     private readonly LuFactorization _factorization;
-    private readonly double _oneNorm;
+    private readonly LuSolver<T> _solver;
 
-    internal LuDecomposition(Matrix<double> factors, LuFactorization factorization, double oneNorm)
+    internal LuDecomposition(Matrix<T> factors, LuFactorization factorization, double oneNorm, LuSolver<T> solver)
     {
         _factors = factors;
         _factorization = factorization;
-        _oneNorm = oneNorm;
+        _solver = solver;
+        OneNormOfA = oneNorm;
     }
+
+    /// <summary>||A||_1 of the matrix before it was factored, for condition estimation.</summary>
+    internal double OneNormOfA { get; }
+
+    /// <summary>The factorization's pivots and diagnostics, for the tests.</summary>
+    internal LuFactorization Factorization => _factorization;
 
     /// <summary>Rows of the factored matrix.</summary>
     public int Rows => _factorization.Rows;
@@ -48,8 +69,8 @@ public sealed class LuDecomposition
     /// Note that this is a narrower condition than "singular". A duplicated
     /// column is mathematically singular but its pivot comes out as rounding
     /// noise rather than an exact zero, so the factorization completes and this
-    /// stays false — identical to <c>dgetrf</c>. Use
-    /// <see cref="ReciprocalCondition"/> to ask about numerical singularity.
+    /// stays false — identical to <c>dgetrf</c>. For a real factorization,
+    /// <c>ReciprocalCondition</c> asks about numerical singularity.
     /// </summary>
     public bool IsSingular => _factorization.IsSingular;
 
@@ -57,10 +78,9 @@ public sealed class LuDecomposition
     public int SingularColumn => _factorization.SingularColumn;
 
     /// <summary>
-    /// Smallest over largest magnitude on U's diagonal. A cheap trouble
+    /// Smallest over largest modulus on U's diagonal. A cheap trouble
     /// indicator, explicitly NOT a condition number: it can be optimistic by
-    /// orders of magnitude. <see cref="ReciprocalCondition"/> is the real
-    /// answer.
+    /// orders of magnitude.
     /// </summary>
     public double PivotRatio => _factorization.PivotRatio;
 
@@ -74,15 +94,16 @@ public sealed class LuDecomposition
     /// The unit lower triangular factor, as a view onto the packed storage. Its
     /// stored diagonal belongs to U and is never read.
     /// </summary>
-    public StructuredMatrix<double, UnitLowerTriangular> Lower => new(_factors.View);
+    public StructuredMatrix<T, UnitLowerTriangular> Lower => new(_factors.View);
 
     /// <summary>The upper triangular factor, as a view onto the packed storage.</summary>
-    public StructuredMatrix<double, UpperTriangular> Upper => new(_factors.View);
+    public StructuredMatrix<T, UpperTriangular> Upper => new(_factors.View);
 
     /// <summary>Solve A*X = B, returning a fresh X.</summary>
     /// <param name="b">Right-hand sides, n x nrhs. Not modified.</param>
     /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
-    public Matrix<double> Solve(ReadOnlyMatrixView<double> b)
+    /// <exception cref="ArgumentException">B does not have n rows.</exception>
+    public Matrix<T> Solve(ReadOnlyMatrixView<T> b)
     {
         var x = Matrix.From(b);
         SolveInPlace(x.View);
@@ -92,52 +113,36 @@ public sealed class LuDecomposition
     /// <summary>Solve A*X = B in place, overwriting <paramref name="b"/> with X.</summary>
     /// <param name="b">Right-hand sides on entry, the solution on exit.</param>
     /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
-    public void SolveInPlace(MatrixView<double> b)
+    /// <exception cref="ArgumentException">B does not have n rows.</exception>
+    public void SolveInPlace(MatrixView<T> b)
     {
         RequireSolvable(b.Rows);
-        KernelEntry.SolveLu(_factorization, _factors.ReadOnlyView.ToOperand(), b.ToTarget());
-    }
-
-    /// <summary>Solve A^T*X = B, returning a fresh X.</summary>
-    /// <param name="b">Right-hand sides, n x nrhs. Not modified.</param>
-    /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
-    public Matrix<double> SolveTransposed(ReadOnlyMatrixView<double> b)
-    {
-        var x = Matrix.From(b);
-        SolveTransposedInPlace(x.View);
-        return x;
-    }
-
-    /// <summary>Solve A^T*X = B in place, overwriting <paramref name="b"/> with X.</summary>
-    /// <param name="b">Right-hand sides on entry, the solution on exit.</param>
-    /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
-    public void SolveTransposedInPlace(MatrixView<double> b)
-    {
-        RequireSolvable(b.Rows);
-        KernelEntry.SolveLuTransposed(_factorization, _factors.ReadOnlyView.ToOperand(), b.ToTarget());
+        _solver.Solve(_factorization, _factors.ReadOnlyView, b);
     }
 
     /// <summary>
-    /// Estimate 1/cond_1(A), the equivalent of LAPACK's <c>dgecon</c>. Returns
-    /// zero for an exactly singular factorization.
-    ///
-    /// The norm of the original matrix was captured before it was overwritten,
-    /// so unlike <c>dgecon</c> this needs no argument and cannot be handed the
-    /// wrong one.
-    ///
-    /// The estimator underestimates the norm of the inverse, so the result is
-    /// an OVER-estimate of the reciprocal condition number: a small value
-    /// reliably means ill-conditioning, a large one is weaker evidence of good
-    /// conditioning.
+    /// Solve A^H*X = B, returning a fresh X. For a real factorization A^H is
+    /// A^T; for a complex one it is the conjugate transpose, which is what an
+    /// adjoint operator and the norm estimator need.
     /// </summary>
-    /// <param name="columns">Probe columns for the estimator; more costs more products.</param>
-    /// <exception cref="InvalidOperationException">The factorization is not square.</exception>
-    public double ReciprocalCondition(int columns = NormEstimate.DefaultColumns)
+    /// <param name="b">Right-hand sides, n x nrhs. Not modified.</param>
+    /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
+    /// <exception cref="ArgumentException">B does not have n rows.</exception>
+    public Matrix<T> SolveAdjoint(ReadOnlyMatrixView<T> b)
     {
-        if (!IsSquare)
-            throw new InvalidOperationException("Condition estimation requires a square factorization.");
+        var x = Matrix.From(b);
+        SolveAdjointInPlace(x.View);
+        return x;
+    }
 
-        return Condition.ReciprocalOne(_oneNorm, this, columns);
+    /// <summary>Solve A^H*X = B in place, overwriting <paramref name="b"/> with X.</summary>
+    /// <param name="b">Right-hand sides on entry, the solution on exit.</param>
+    /// <exception cref="InvalidOperationException">The factorization is not square, or has an exactly zero pivot.</exception>
+    /// <exception cref="ArgumentException">B does not have n rows.</exception>
+    public void SolveAdjointInPlace(MatrixView<T> b)
+    {
+        RequireSolvable(b.Rows);
+        _solver.SolveAdjoint(_factorization, _factors.ReadOnlyView, b);
     }
 
     /// <summary>
@@ -147,17 +152,17 @@ public sealed class LuDecomposition
     /// This overflows or underflows for even moderately sized matrices — the
     /// product of n numbers has roughly n times the exponent range of one — so
     /// it is a convenience for small problems and for tests, not a numerical
-    /// tool. Ask <see cref="ReciprocalCondition"/> whether a matrix is
+    /// tool. A condition estimate is the way to ask whether a matrix is
     /// invertible; a determinant is a poor way to find out.
     /// </summary>
     /// <exception cref="InvalidOperationException">The factorization is not square.</exception>
-    public double Determinant()
+    public T Determinant()
     {
         if (!IsSquare)
             throw new InvalidOperationException("Determinant requires a square factorization.");
 
-        double product = 1.0;
-        MatrixView<double> factors = _factors.View;
+        T product = T.One;
+        ReadOnlyMatrixView<T> factors = _factors.ReadOnlyView;
 
         for (int i = 0; i < Rows; i++) product *= factors[i, i];
 
@@ -176,4 +181,57 @@ public sealed class LuDecomposition
         if (rows != Rows)
             throw new ArgumentException($"Right-hand side has {rows} rows, expected {Rows}.", nameof(rows));
     }
+}
+
+/// <summary>
+/// The solves behind an <see cref="LuDecomposition{T}"/>, chosen by the factory
+/// that made it. The element type is bound to its implementation there, where
+/// it is known, so the generic decomposition never has to test what
+/// <c>T</c> is. One virtual call per solve, against O(n^2) of work.
+/// </summary>
+internal abstract class LuSolver<T> where T : unmanaged, INumberBase<T>
+{
+    /// <summary>A*X = B in place; the shapes are already checked.</summary>
+    public abstract void Solve(LuFactorization lu, ReadOnlyMatrixView<T> factors, MatrixView<T> b);
+
+    /// <summary>A^H*X = B in place; the shapes are already checked.</summary>
+    public abstract void SolveAdjoint(LuFactorization lu, ReadOnlyMatrixView<T> factors, MatrixView<T> b);
+}
+
+/// <summary>The real solves: the kernel assembly's substitution, unchanged.</summary>
+internal sealed class KernelLuSolver : LuSolver<double>
+{
+    public static readonly KernelLuSolver Instance = new();
+
+    private KernelLuSolver()
+    {
+    }
+
+    /// <inheritdoc/>
+    public override void Solve(LuFactorization lu, ReadOnlyMatrixView<double> factors, MatrixView<double> b) =>
+        KernelEntry.SolveLu(lu, factors.ToOperand(), b.ToTarget());
+
+    /// <inheritdoc/>
+    public override void SolveAdjoint(LuFactorization lu, ReadOnlyMatrixView<double> factors, MatrixView<double> b) =>
+        KernelEntry.SolveLuTransposed(lu, factors.ToOperand(), b.ToTarget());
+}
+
+/// <summary>The generic solves of <see cref="BlockedLu"/>, for any element type with kernels.</summary>
+internal sealed class ManagedLuSolver<T, TKernels> : LuSolver<T>
+    where T : unmanaged, INumberBase<T>
+    where TKernels : struct, IElementKernels<T>
+{
+    public static readonly ManagedLuSolver<T, TKernels> Instance = new();
+
+    private ManagedLuSolver()
+    {
+    }
+
+    /// <inheritdoc/>
+    public override void Solve(LuFactorization lu, ReadOnlyMatrixView<T> factors, MatrixView<T> b) =>
+        BlockedLu.Solve<T, TKernels>(lu, factors, b);
+
+    /// <inheritdoc/>
+    public override void SolveAdjoint(LuFactorization lu, ReadOnlyMatrixView<T> factors, MatrixView<T> b) =>
+        BlockedLu.SolveAdjoint<T, TKernels>(lu, factors, b);
 }

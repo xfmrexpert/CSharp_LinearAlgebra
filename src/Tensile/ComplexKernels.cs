@@ -111,6 +111,12 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
     public static double Magnitude(Complex value) => Complex.Abs(value);
 
     /// <inheritdoc/>
+    public static double PivotMagnitude(Complex value) => Math.Abs(value.Real) + Math.Abs(value.Imaginary);
+
+    /// <inheritdoc/>
+    public static Complex Conjugate(Complex value) => Complex.Conjugate(value);
+
+    /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<Complex> a)
     {
         if (a.Rows == 0 || a.Columns == 0) return 0.0;

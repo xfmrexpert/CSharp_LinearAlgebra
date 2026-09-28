@@ -248,34 +248,41 @@ rather than measured.
 
 ## Matrix-free operators and norm estimation
 
-`ILinearOperator` is the extension point for anything that can be applied but
-should not be formed: a matrix power, an inverse, and later the operators
-`expm` and `expmv` probe. It takes and returns bound views, so an
-implementation receives the extents along with the data and cannot be handed a
-buffer shorter than its `Order` claims.
+`ILinearOperator<T>` is the extension point for anything that can be applied
+but should not be formed: a matrix power, an inverse, and the operators `expm`
+and `expmv` probe. It takes and returns bound views, so an implementation
+receives the extents along with the data and cannot be handed a buffer shorter
+than its `Order` claims. `T` is the element type — `double` or `Complex` for
+anything the library computes with.
 
 ```csharp
-public interface ILinearOperator
+public interface ILinearOperator<T>
 {
     int Order { get; }
-    void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);            // Y := A X
+    void Apply(ReadOnlyMatrixView<T> x, MatrixView<T> y);            // Y := A X
 }
 
-public interface ITransposableOperator : ILinearOperator
+public interface IAdjointOperator<T> : ILinearOperator<T>
 {
-    void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);   // Y := Aᵀ X
+    void ApplyAdjoint(ReadOnlyMatrixView<T> x, MatrixView<T> y);     // Y := Aᴴ X
 }
 ```
 
-The transpose is a **separate capability**, not part of the base contract. A
+The adjoint is a **separate capability**, not part of the base contract. A
 matrix-free operator — an FEM or MTL operator assembled on the fly — can very
-often apply `A` and not cheaply apply `Aᵀ`, so requiring both would force every
-implementer to supply a transpose in order that one algorithm could have it.
-Implement `ILinearOperator` if you only ever apply forward;
-`ITransposableOperator` is what `NormEstimate` asks for, because Higham and
-Tisseur's estimator alternates products with `A` and `Aᵀ`.
+often apply `A` and not cheaply apply `Aᴴ`, so requiring both would force every
+implementer to supply one in order that one algorithm could have it. Implement
+`ILinearOperator<T>` if you only ever apply forward; `IAdjointOperator<T>` is
+what `NormEstimate` asks for, because Higham and Tisseur's estimator alternates
+products with `A` and its adjoint.
 
-Two implementations ship, both transposable. `DenseMatrixOperator(a, power)`
+It is the **adjoint** — the conjugate transpose — and not the transpose,
+because that is what the estimator needs. For a real operator the two are the
+same, which is why this was once called `ApplyTranspose`. For a complex one the
+transpose is the wrong operation, and supplying it would give an estimator that
+is quietly wrong rather than one that fails.
+
+Two implementations ship, both `IAdjointOperator<double>`. `DenseMatrixOperator(a, power)`
 applies `Aᵖ` by `p` successive panel products without forming the power;
 `LuInverseOperator(lu)` applies `A⁻¹` by solving. Both are what `NormEstimate`
 needs:
@@ -425,9 +432,9 @@ than a matrix, and uses **only** `Apply` — no transpose, no entries, no trace:
 var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
 ```
 
-This is why `ILinearOperator` does not require a transpose. The price is the
-parameter choice: without products by Aᵀ the ‖A^p‖^(1/p) quantities cannot be
-estimated, so the scaling falls back to the bound you supply. Since
+This is why `ILinearOperator<T>` does not require an adjoint. The price is the
+parameter choice: without products by the adjoint the ‖A^p‖^(1/p) quantities
+cannot be estimated, so the scaling falls back to the bound you supply. Since
 ‖A^p‖^(1/p) ≤ ‖A‖, that is always safe — it can only pick a larger s than
 necessary, never a smaller one — but for a strongly nonnormal operator it can
 be a lot more work than the dense path would do. Supply the tightest bound you
@@ -435,9 +442,127 @@ have.
 
 ---
 
+## Complex matrices
+
+### Products
+
+`Matrix<Complex>` (`System.Numerics.Complex`) multiplies with the same call
+shapes as the real type. Complex scalars have no compile-time constant form, so
+the scaled accumulation is a separate overload rather than optional arguments:
+
+```csharp
+var c = a.Multiply(b);                                   // A B
+a.MultiplyInto(b, c.View);                               // c := A B
+a.MultiplyInto(b, c.View, alpha, beta);                  // c := beta c + alpha A B
+workspace.Multiply(a.ReadOnlyView, b.ReadOnlyView, c.View, alpha, beta);
+```
+
+These are native, not embedded: the **4M method**, four real products on the
+workspace's own kernel and dispatch — Re(AB) = ArBr − AiBi, Im(AB) = ArBi + AiBr.
+That is exactly the flop count of a conventional complex product, and it runs
+on the real GEMM that is at parity with BLIS. The destination is written only
+after all four products succeed, so a failure leaves it untouched.
+
+It is 4M and not the cheaper 3M (three products) because 3M's error in the
+imaginary part is relative to the whole magnitude of the operands, so a small
+imaginary part is swamped. Measured on operands whose imaginary parts are a
+factor ρ smaller than their real parts:
+
+| ρ | 4M, relative error of Im(AB) | 3M, relative error of Im(AB) |
+| --- | --- | --- |
+| 10³ | 6e-14 | 9e-11 |
+| 10⁶ | 5e-14 | 1e-7 |
+| 10⁹ | 3e-14 | 1e-4 |
+| 10¹² | 9e-14 | 0.19 |
+
+This matters for line models specifically: in a product such as
+ZY = (R + jωL)(G + jωC), the loss terms ω(LG + RC) land in the small imaginary
+part, next to a dominant −ω²LC. 3M would lose the damping first.
+
+The cost of 4M is splitting: real and imaginary copies of both operands and of
+the product. The workspace keeps those buffers between products, so a run of
+products — the squarings of an exponential, the trailing updates of a
+factorization — allocates them once. Retention is capped at 2²¹ elements
+(16 MiB, a 512×512 complex product in full) because the buffers grow with the
+problem and `Workspace.Shared` lives as long as the process; a larger product
+gets buffers of its own for that call, and a workspace that has run complex
+products may hold up to that much more memory than one that has not. Disposing
+a workspace releases them.
+
+With the buffers retained, 4M measured 4.4× one real product at n=128 and 4.0×
+at n=512 on a development container, against an ideal 4.0, and 1.8–2.0× faster
+than the embedded route. Those are noisy figures from a short job; the
+verification-machine measurement is outstanding. `ComplexGemmBenchmarks` is the
+instrument.
+
+### Exponentials
+
+`Expm` and `Expmv` accept `Matrix<Complex>` with the same call shape as the
+real ones:
+
+```csharp
+var e = z.Expm();                          // exp(Z)
+var y = z.Expmv(b.ReadOnlyView, t: 0.5);   // exp(0.5 Z) B, t real
+```
+
+In the standard multiconductor-line formulation this is the chain-parameter
+matrix Φ(ℓ) = exp(Mℓ), with M = [[0, −Z(ω)], [−Y(ω), 0]] complex at each
+frequency, so a frequency sweep is one of these per frequency.
+
+**How they are computed today.** There is no complex LU or norm estimator
+yet, so these run the real algorithms on the real representation of the
+complex matrix: X + iY becomes
+the 2n×2n matrix [[X, −Y], [Y, X]], which the exponential commutes with. The
+answer is the real algorithm's, verified against an independent complex Taylor
+series and against invariants such as exp(iH) being unitary for Hermitian H.
+The public signatures will not change when native complex primitives replace
+this.
+
+What the route costs, compared with a native implementation that does not
+exist yet:
+
+| | `Expm` | `Expmv` |
+| --- | --- | --- |
+| Flops | 2× — each product computes every block twice | 1× — the stacked panel is not redundant |
+| Memory | 2× | 2× for the matrix |
+| Parameter choice | at most one extra squaring | scaling up to √2 larger |
+
+The last row is because the embedded 1-norm is between 1 and √2 times the
+complex one. Random complex matrices sit near √2 (1.28–1.39 measured); real
+ones sit at exactly 1, and a real matrix passed as complex takes exactly the
+real path, parameters included. `Expmv` is memory-bound, so expect its time
+nearer twice a native version's than level with it despite equal flops —
+unmeasured.
+
+`Expmv` removes the **imaginary** part of the trace shift itself before
+embedding, because the real representation cannot: its trace is only
+2·Re(trace A). The shift comes back as a unit-modulus factor e^(itω), which
+cannot overflow. This matters for any operator carrying a large imaginary
+diagonal — a jωI term — where leaving it in cost up to 24× the work in
+measurement. (The MTL chain matrix has zero trace, so it is unaffected either
+way.)
+
+A matrix-free complex operator — an `ILinearOperator<Complex>` — has its own
+overload, which applies the operator through its real representation without
+ever forming it:
+
+```csharp
+var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
+```
+
+As with the real matrix-free overload, the scaling comes from the bound you
+supply (scaled internally by √2 for the real representation). There is no
+trace to shift by either, so an operator carrying a large jωI term keeps it.
+If you know that shift, remove it yourself: exp(tA)B = e^(iωt)·exp(t(A − iωI))B,
+exactly, and apply the operator without it.
+
+---
+
 ## Not here yet
 
-- **Complex**, which the transformer-winding application ultimately needs.
+- **Complex LU, solves and norm estimation.** Complex products are native;
+  the exponentials above still reach complex matrices through a real
+  representation until these exist.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
 - **Arithmetic for any type but `double`.** Storage is generic; operations are

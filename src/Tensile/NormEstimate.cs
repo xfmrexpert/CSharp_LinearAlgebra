@@ -58,7 +58,7 @@ public static class NormEstimate
     /// <exception cref="ArgumentOutOfRangeException">The operator's order is negative, or the n x t probe panel would not fit a buffer.</exception>
     /// <exception cref="AllocationLimitException">A probe panel would exceed <see cref="TensileLimits.MaxElements"/>.</exception>
     public static NormEstimateResult Of(
-        ITransposableOperator op,
+        IAdjointOperator<double> op,
         int columns = DefaultColumns,
         int maxIterations = DefaultMaxIterations,
         int seed = DefaultSeed)
@@ -175,7 +175,7 @@ public static class NormEstimate
                 MakeColumnsDistinct(rng, n, t, s, sOld);
             }
 
-            op.ApplyTranspose(ReadOnlyMatrixView<double>.Bind(s, panel), MatrixView<double>.Bind(z, panel));
+            op.ApplyAdjoint(ReadOnlyMatrixView<double>.Bind(s, panel), MatrixView<double>.Bind(z, panel));
             products += t;
 
             for (int i = 0; i < n; i++)

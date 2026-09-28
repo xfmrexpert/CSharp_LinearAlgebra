@@ -174,7 +174,31 @@ public sealed class AllocationLimitTests : IDisposable
         _ = new Matrix<double>(100, 100);
     }
 
-    private sealed class UntouchedOperator(int order) : ITransposableOperator
+    /// <summary>
+    /// The complex exponentials compute through a 2n x 2n real embedding,
+    /// four times the input's element count, so they can be refused under a
+    /// limit the input itself fits. That refusal must be the policy exception,
+    /// raised before any work -- not an out-of-memory somewhere inside the
+    /// real algorithm, and not silently skipped because the input passed.
+    /// </summary>
+    [Fact]
+    public void ComplexExponentialsAreRefusedWhenOnlyTheirEmbeddingExceedsTheLimit()
+    {
+        const int N = 32;
+
+        var a = Matrix.Identity<System.Numerics.Complex>(N);
+        var b = Matrix.Zeros<System.Numerics.Complex>(N, 1);
+
+        TensileLimits.MaxElements = 2 * N * N;
+
+        // The premise: a matrix the size of the input is allowed under this limit.
+        _ = new Matrix<System.Numerics.Complex>(N, N);
+
+        Assert.Throws<AllocationLimitException>(() => a.Expm());
+        Assert.Throws<AllocationLimitException>(() => a.Expmv(b.ReadOnlyView));
+    }
+
+    private sealed class UntouchedOperator(int order) : IAdjointOperator<double>
     {
         public bool Touched { get; private set; }
 
@@ -182,6 +206,6 @@ public sealed class AllocationLimitTests : IDisposable
 
         public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
 
-        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
+        public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Touched = true;
     }
 }

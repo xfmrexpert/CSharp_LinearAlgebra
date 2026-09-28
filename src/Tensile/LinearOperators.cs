@@ -1,3 +1,4 @@
+using System.Numerics;
 using Tensile.Kernels;
 
 namespace Tensile;
@@ -11,12 +12,17 @@ namespace Tensile;
 /// <c>expm</c> and <c>expmv</c> plug into, and the one a FEM or MTL operator
 /// plugs into without ever assembling a dense matrix.
 ///
-/// Only the forward direction is required here. Applying A^T is a genuinely
-/// separate capability -- a matrix-free operator can very often apply A and not
-/// cheaply apply A^T -- so it lives on <see cref="ITransposableOperator"/>,
-/// which is what the 1-norm estimator asks for. Requiring both on one interface
-/// would force every implementer to supply a transpose so that one algorithm
-/// could have it.
+/// Generic over the element type because the same operator shape serves real
+/// and complex problems. An element type the library has no arithmetic for is
+/// not an error here -- nothing in this interface computes anything -- but no
+/// algorithm will accept it.
+///
+/// Only the forward direction is required here. Applying the adjoint is a
+/// genuinely separate capability -- a matrix-free operator can very often
+/// apply A and not cheaply apply A^H -- so it lives on
+/// <see cref="IAdjointOperator{T}"/>, which is what the 1-norm estimator asks
+/// for. Requiring both on one interface would force every implementer to
+/// supply an adjoint so that one algorithm could have it.
 ///
 /// Both panels arrive as bound views, so an implementation receives their
 /// extents along with their contents and cannot be handed a buffer that is
@@ -27,7 +33,8 @@ namespace Tensile;
 ///
 /// Square operators only.
 /// </summary>
-public interface ILinearOperator
+/// <typeparam name="T">The element type: <see cref="double"/> or <see cref="Complex"/> for anything the library computes with.</typeparam>
+public interface ILinearOperator<T> where T : unmanaged, INumberBase<T>
 {
     /// <summary>Order n of the operator.</summary>
     int Order { get; }
@@ -35,27 +42,36 @@ public interface ILinearOperator
     /// <summary>Y := A * X, X and Y being n x t panels of the same width.</summary>
     /// <param name="x">The panel to apply the operator to.</param>
     /// <param name="y">Receives the result. Overwritten.</param>
-    void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y);
+    void Apply(ReadOnlyMatrixView<T> x, MatrixView<T> y);
 }
 
 /// <summary>
-/// An operator that can also apply its transpose.
+/// An operator that can also apply its adjoint, A^H -- the conjugate
+/// transpose.
 ///
 /// Higham and Tisseur's 1-norm estimator alternates products with A and with
-/// A^T -- it is the A^T step that tells it which unit vectors to try next -- so
-/// <see cref="NormEstimate"/> requires this rather than the bare
-/// <see cref="ILinearOperator"/>. Anything that only ever applies A forward,
-/// which includes <c>expmv</c>, should take the weaker interface.
+/// its adjoint -- it is the adjoint step that tells it which unit vectors to
+/// try next -- so <see cref="NormEstimate"/> requires this rather than the bare
+/// <see cref="ILinearOperator{T}"/>. Anything that only ever applies A
+/// forward, which includes <c>expmv</c>, should take the weaker interface.
+///
+/// Adjoint and not transpose, because that is what the estimator needs. For a
+/// real operator the two are the same operation, which is why this was once
+/// named for the transpose; for a complex one the transpose is the wrong
+/// operation entirely, and an implementation that supplied A^T where A^H was
+/// meant would give an estimator that is quietly wrong rather than one that
+/// fails.
 ///
 /// Both directions must map the same space, so the operator is square in the
-/// sense <see cref="ILinearOperator.Order"/> already requires.
+/// sense <see cref="ILinearOperator{T}.Order"/> already requires.
 /// </summary>
-public interface ITransposableOperator : ILinearOperator
+/// <typeparam name="T">The element type.</typeparam>
+public interface IAdjointOperator<T> : ILinearOperator<T> where T : unmanaged, INumberBase<T>
 {
-    /// <summary>Y := A^T * X, X and Y being n x t panels of the same width.</summary>
-    /// <param name="x">The panel to apply the transposed operator to.</param>
+    /// <summary>Y := A^H * X, X and Y being n x t panels of the same width. For a real operator, A^T.</summary>
+    /// <param name="x">The panel to apply the adjoint to.</param>
     /// <param name="y">Receives the result. Overwritten.</param>
-    void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y);
+    void ApplyAdjoint(ReadOnlyMatrixView<T> x, MatrixView<T> y);
 }
 
 /// <summary>
@@ -70,7 +86,7 @@ public interface ITransposableOperator : ILinearOperator
 /// to the matrix are seen by later applications. It holds no other state and
 /// is safe to apply from several threads at once.
 /// </summary>
-public sealed class DenseMatrixOperator : ITransposableOperator
+public sealed class DenseMatrixOperator : IAdjointOperator<double>
 {
     private readonly Matrix<double> _a;
     private readonly int _power;
@@ -102,7 +118,7 @@ public sealed class DenseMatrixOperator : ITransposableOperator
     public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Repeat(x, y, transposed: false);
 
     /// <inheritdoc/>
-    public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Repeat(x, y, transposed: true);
+    public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y) => Repeat(x, y, transposed: true);
 
     /// <summary>
     /// Apply A (or A^T) <see cref="Power"/> times, landing in Y.
@@ -155,7 +171,7 @@ public sealed class DenseMatrixOperator : ITransposableOperator
 /// condition estimator, since cond_1(A) = ||A||_1 * ||A^-1||_1 and the second
 /// factor is exactly what the estimator can reach without forming A^-1.
 /// </summary>
-public sealed class LuInverseOperator : ITransposableOperator
+public sealed class LuInverseOperator : IAdjointOperator<double>
 {
     private readonly LuDecomposition _lu;
 
@@ -185,7 +201,7 @@ public sealed class LuInverseOperator : ITransposableOperator
 
     /// <inheritdoc/>
     /// <exception cref="InvalidOperationException">The factorization has an exactly zero pivot.</exception>
-    public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y)
     {
         CopyInto(x, y);
         _lu.SolveTransposedInPlace(y);

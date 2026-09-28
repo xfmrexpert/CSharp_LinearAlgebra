@@ -151,7 +151,7 @@ public class HostileDimensionTests
     /// here because it would take the test host down rather than fail; the
     /// same validation closes both.
     ///
-    /// Reachable through the public extension point: an ILinearOperator is
+    /// Reachable through the public extension point: an ILinearOperator<T> is
     /// free to report any Order, and a matrix-free operator has no storage
     /// whose size would constrain it. Since Phase 3 the operator receives
     /// bound views, so the reverse direction -- an operator writing past a
@@ -188,14 +188,14 @@ public class HostileDimensionTests
     /// contrived attacker: it is the shape of every matrix-free operator, and
     /// the reason the estimator cannot trust Order alone.
     /// </summary>
-    private sealed class HostileOrderOperator(int order) : ITransposableOperator
+    private sealed class HostileOrderOperator(int order) : IAdjointOperator<double>
     {
         public int Order => order;
 
         public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y) =>
             throw new InvalidOperationException("Apply must not be reached: validation should have rejected the panel size.");
 
-        public void ApplyTranspose(ReadOnlyMatrixView<double> x, MatrixView<double> y) =>
-            throw new InvalidOperationException("ApplyTranspose must not be reached.");
+        public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y) =>
+            throw new InvalidOperationException("ApplyAdjoint must not be reached.");
     }
 }

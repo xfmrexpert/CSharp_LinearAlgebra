@@ -2,7 +2,7 @@ namespace Tensile.Kernels;
 
 /// <summary>
 /// Products of a square matrix with a narrow panel of columns: the streamed
-/// path behind <c>ILinearOperator.Apply</c>.
+/// path behind <c>ILinearOperator&lt;double&gt;.Apply</c>.
 ///
 /// These exist rather than routing through <see cref="Gemm"/> because the
 /// 1-norm estimator probes with t columns, where t is 2 or 4. Packing an

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using SharpFuzz;
 
 namespace Tensile.Fuzz;
@@ -122,7 +123,13 @@ internal static class Script
 
             try
             {
-                switch (op % 14)
+                // Adding an operation changes this modulus, which remaps every op
+                // byte at or above the old one. That was checked before case 14
+                // went in: every op byte the shipped corpus executes is below
+                // 14, so each seed does exactly what it did before. Re-check it
+                // (log the op bytes a --self-check run executes) before adding
+                // another.
+                switch (op % 15)
                 {
                     case 0:
                         _ = new MatrixShape(reader.Int(), reader.Int(), reader.Int());
@@ -203,6 +210,23 @@ internal static class Script
                         a.As<UnitLowerTriangular>().SolveTransposedInPlace(b.View);
                         break;
                     }
+
+                    case 14:
+                    {
+                        // The complex surface: the 4M product, the exponentials
+                        // through the real embedding, and the action. Hostile
+                        // dimensions make most of these non-square and rejected,
+                        // which is the point; t stays in [-2, 2] so a square case
+                        // costs milliseconds rather than looking like a hang.
+                        var z = new Matrix<Complex>(reader.Dimension(), reader.Dimension());
+                        FillComplex(z, reader.Byte());
+                        double t = (reader.Small() - 128) / 64.0;
+
+                        _ = z.Multiply(z);
+                        _ = z.Expm();
+                        _ = z.Expmv(z.ReadOnlyView, t);
+                        break;
+                    }
                 }
             }
             catch (ArgumentException)
@@ -218,6 +242,15 @@ internal static class Script
                 // Documented: refused by policy.
             }
         }
+    }
+
+    private static void FillComplex(Matrix<Complex> m, byte pattern)
+    {
+        var rng = new Random(pattern);
+
+        for (int j = 0; j < m.Columns; j++)
+            for (int i = 0; i < m.Rows; i++)
+                m[i, j] = new Complex(rng.NextDouble() - 0.5 + (i == j ? m.Rows : 0.0), rng.NextDouble() - 0.5);
     }
 
     private static void Fill(Matrix<double> m, byte pattern)

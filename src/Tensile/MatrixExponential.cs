@@ -27,7 +27,7 @@ namespace Tensile;
 /// A matrix whose exponential is genuinely ill-conditioned will lose digits
 /// here as it would anywhere.
 /// </summary>
-public static class MatrixExponential
+public static partial class MatrixExponential
 {
     /// <summary>
     /// The largest ||A|| at which each Padé degree achieves backward error

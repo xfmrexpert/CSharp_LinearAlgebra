@@ -261,7 +261,11 @@ allocation path, which is fixed by I7 and I9.
 since moved to a derived `ITransposableOperator`, which is what `NormEstimate`
 requires. The security argument is unchanged — both interfaces take bound views
 and neither can mint a pointer — but an operator that only applies `A` forward
-no longer has to implement a transpose it cannot compute.
+no longer has to implement a transpose it cannot compute. Later still, both became generic
+over the element type — `ILinearOperator<T>` and `IAdjointOperator<T>` — and
+`ApplyTranspose` became `ApplyAdjoint`, since for complex operators the
+estimator needs the conjugate transpose. Still views on both sides, still no
+pointer.
 
 ### 5.5 The pinning seam — where spans become pointers
 
@@ -319,7 +323,7 @@ packing layout, asserted under `Debug` (§8, "debug assertions").
 
 | Assembly | `AllowUnsafeBlocks` | Visibility | Contents |
 |---|---|---|---|
-| `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator`, the `normest1` driver |
+| `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator<T>`, the `normest1` driver |
 | `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, ColumnOps/Pivoting/PanelProduct, exact norms, `KernelEntry` |
 | `Tensile.Interop.Blis` | true | public, **separate package** | the BLIS binding |
 

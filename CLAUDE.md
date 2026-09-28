@@ -89,10 +89,11 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/*.Complex.cs` | The complex public surface (`Expm`, `Expmv`, `Multiply` on `Workspace` and `MatrixOperations`), as partials of the real classes, so an implementation can change behind a signature that does not move |
 | `src/Tensile/ElementKernels.cs` | `IElementKernels<T>`: the static-abstract seam a generic algorithm binds its arithmetic through (products, magnitudes, exact norms), and `DoubleKernels` over the existing real path |
 | `src/Tensile/ComplexKernels.cs` | `ComplexKernels`: complex products by 4M over the real GEMM, complex magnitudes and norms |
+| `src/Tensile/ComplexScratch.cs` | The 4M split buffers a `Workspace` retains between products, capped at 2^21 elements; a product over the cap gets its own for that call |
 | `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back, and `EmbeddedOperator` for matrix-free complex operators. Today's complex implementation and, permanently, the complex oracle |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
-| `src/Tensile/Workspace.cs` | Kernel choice + packing buffers, internally locked |
+| `src/Tensile/Workspace.cs` | Kernel choice + packing buffers + complex split buffers, internally locked; `Gate`/`MultiplyHeld` for an operation that must hold the lock across several products |
 | `src/Tensile/LuDecomposition.cs` | Owning factorization; captures ||A||_1 before overwriting A |
 | `src/Tensile/MatrixOperations.cs` | Fluent extensions on `Matrix<double>` and the structured solves |
 | `src/Tensile.Kernels/KernelEntry.cs` | The single seam where spans are pinned and become pointers; restates every shape precondition |
@@ -101,7 +102,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1154 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1171 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -1016,19 +1017,39 @@ well- and ill-conditioned inputs.
   n=128/512/2048 — noise around zero, with the shipped path executing last and
   hottest in every group. See "What the secure-by-design migration cost"
   above. The section 9 guardrail is satisfied.
-- **4M allocates its temporaries per call.** Six real matrices — real and
-  imaginary parts of A, B and the product — freshly allocated, zeroed, on the
-  pinned object heap, on every complex product. Measured on the development
-  container this makes 4M slower than the embedded route at n=128 (9.1x a
-  real GEMM against 7.4x) while it wins by ~1.6x from n=512 up. Two fixes, in
-  increasing cost: keep the split buffers in the `Workspace` beside its
-  packing buffers (its lock is reentrant, so 4M can hold it across all four
-  products), which removes the allocation and the zeroing; or split inside
-  the packing routines (BLIS's 1M method), which removes the temporaries
-  altogether. Neither is written, deliberately: the container numbers are
-  noisy, and `ComplexGemmBenchmarks` on the 12700H should decide it. It
-  matters for the target application, whose 2N sits in the few-hundreds
-  where this overhead is largest.
+- ~~**4M allocates its temporaries per call.**~~ *Closed for the sizes that
+  matter, by option 1 of two.* The six split buffers (real and imaginary parts
+  of A, B and the product) now live in the `Workspace` (`ComplexScratch`) and
+  are reused; the complex product holds the workspace lock once, across the
+  split, all four products and the combine, and runs the products through
+  `MultiplyHeld` so the lock is never re-entered. Nothing is zeroed on reuse:
+  the split writes every operand element and the first product into each
+  result part has beta = 0. Retention is capped at 2^21 elements (16 MiB,
+  a 512x512 complex product in full), because these buffers scale with the
+  problem and `Workspace.Shared` lives as long as the process; a product
+  over the cap gets buffers of its own for that call, on the ordinary heap
+  rather than the pinned one.
+
+  Measured on the development container (BDN short job, single-threaded
+  workspace, StdDev up to 15%, so within-run ratios only), 4M over one real
+  GEMM of the same order:
+
+  | n | before | after | embedded route, same run | allocated per call |
+  | --- | --- | --- | --- | --- |
+  | 128 | 9.13 | **4.43** | 7.83 | 788 KB -> 0 |
+  | 512 | 4.88 | **4.01** | 7.94 | 12.6 MB -> 0 |
+  | 1024 | 4.65 | 5.42 +- 0.60 | 8.19 | 50.3 MB, over the cap |
+
+  n=128 no longer inverts: 4M is now 1.8x faster than embedding there, which
+  is the hypothesis — allocation, not copying, dominated at small n —
+  confirmed on this host. At n=512 what remains over the ideal 4.0 is inside
+  the noise, which bounds what option 2 (BLIS's 1M, splitting inside the
+  packing) could still win at that size: very little. n=1024 is over the cap
+  and still allocates; its after-figure is a different sitting from its
+  before-figure and the two are not comparable (finding 12). **Still open**:
+  the 12700H numbers, pinned at `--iterationCount 31`, and whether the cap is
+  right — it is a memory-for-speed policy, set to cover the target
+  application's few-hundred order, not measured.
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
   against O(n^2) work, but it means concurrent independent solves on a shared
   workspace queue. Only worth revisiting if a real workload wants many small
@@ -1126,19 +1147,16 @@ a documented public API, and structure-typed dispatch. What remains:
       returns a `Complex`) and the exact norms. One generic contract test runs
       against both. LU and the estimator's products join it in steps 3 and 4.
 
-      **Measured only on the development container so far** (BDN short job,
-      single-threaded workspace, StdDev up to 17%, so read the within-run
-      ratios, not the times): 4M over one real GEMM of the same order reads
-      4.88 at n=512 and 4.65 at n=1024 against an ideal 4.0, and the
-      embedded route reads 7.74 and 7.65 against an ideal 8.0 — so 4M is
-      about 1.6x faster than embedding there. **At n=128 it inverts: 4M reads
-      9.13 against embedding's 7.37.** The mechanism is in the one exact
-      column of that report: the real path allocates nothing per call (the
-      workspace owns its packing buffers), while 4M allocates six zeroed
-      temporaries on the pinned object heap every call — 788 KB at n=128,
-      12.6 MB at 512 — and at small n that dominates. See "4M allocates its
-      temporaries per call" under open items; the 12700H measurement comes
-      first.
+      **Measured only on the development container so far** (BDN short
+      job, single-threaded workspace, StdDev up to 17%, so read the
+      within-run ratios, not the times): 4M over one real GEMM of the same
+      order first read 9.13 / 4.88 / 4.65 at n=128 / 512 / 1024 against an
+      ideal 4.0, with the embedded route at 7.4-7.7 against an ideal 8.0. The
+      n=128 inversion was six zeroed temporaries allocated on the pinned
+      object heap per call; with the split buffers retained by the workspace
+      it reads 4.43 at n=128 and 4.01 at n=512. See "4M allocates its
+      temporaries per call" under open items, now closed for sizes under the
+      retention cap; the 12700H measurement is still to come.
    3. Complex LU and solves. LAPACK's `izamax` pivots on |Re| + |Im|, not |z|;
       match it to keep pivot sequences comparable with `zgetrf`, as
       `Pivoting` does for the real case.

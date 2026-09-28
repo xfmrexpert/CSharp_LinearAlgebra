@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Tensile.Kernels;
 
 namespace Tensile;
@@ -20,6 +21,12 @@ namespace Tensile;
 /// is the right default for ordinary code and the wrong one for a benchmark,
 /// where the lock and the shared buffers are measurement noise.
 ///
+/// Complex products also keep their split buffers here, up to a fixed cap of
+/// 16 MiB; a product too
+/// large for the cap allocates its own for that call. So a workspace that has
+/// run complex products may hold that much more than one that has not, and
+/// <see cref="Shared"/> holds it for the life of the process.
+///
 /// The workspace itself remains disposable because its packing buffers are
 /// native memory owned by the kernel layer; the allocator phase of the
 /// security migration revisits that. The matrices it operates on are not
@@ -35,6 +42,7 @@ public sealed partial class Workspace : IDisposable
     private readonly Lock _gate = new();
     private readonly Kernel _kernel;
     private GemmDispatch? _dispatch;
+    private ComplexScratch? _complexScratch;
 
     /// <summary>Create a workspace using the widest micro-kernel this CPU supports.</summary>
     /// <param name="multithreaded">
@@ -127,20 +135,48 @@ public sealed partial class Workspace : IDisposable
 
         lock (_gate)
         {
-            GemmDispatch dispatch = Active;
+            MultiplyHeld(a, b, c, alpha, beta);
+        }
+    }
 
-            switch (_kernel)
-            {
-                case Kernel.Avx512:
-                    KernelEntry.Multiply<Avx512Kernel16x8>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
-                    break;
-                case Kernel.Avx2:
-                    KernelEntry.Multiply<Avx2Kernel8x6>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
-                    break;
-                default:
-                    KernelEntry.Multiply<ScalarKernel4x4>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
-                    break;
-            }
+    /// <summary>
+    /// The workspace's lock, for an operation that has to hold it across
+    /// several steps -- a complex product is four real ones over buffers this
+    /// workspace owns, and another caller must not get in between them. The
+    /// steps then go through <see cref="MultiplyHeld"/> rather than
+    /// <see cref="Multiply(ReadOnlyMatrixView{double}, ReadOnlyMatrixView{double}, MatrixView{double}, double, double)"/>,
+    /// so the lock is taken once and never re-entered.
+    /// </summary>
+    internal Lock Gate => _gate;
+
+    /// <summary>
+    /// The real product, for a caller already holding <see cref="Gate"/>.
+    /// Shapes are the caller's to have checked; the kernel entry restates
+    /// them regardless.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
+    internal void MultiplyHeld(
+        ReadOnlyMatrixView<double> a,
+        ReadOnlyMatrixView<double> b,
+        MatrixView<double> c,
+        double alpha,
+        double beta)
+    {
+        Debug.Assert(_gate.IsHeldByCurrentThread, "MultiplyHeld requires the workspace lock.");
+
+        GemmDispatch dispatch = Active;
+
+        switch (_kernel)
+        {
+            case Kernel.Avx512:
+                KernelEntry.Multiply<Avx512Kernel16x8>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
+                break;
+            case Kernel.Avx2:
+                KernelEntry.Multiply<Avx2Kernel8x6>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
+                break;
+            default:
+                KernelEntry.Multiply<ScalarKernel4x4>(dispatch, a.ToOperand(), b.ToOperand(), c.ToTarget(), alpha, beta);
+                break;
         }
     }
 
@@ -205,13 +241,14 @@ public sealed partial class Workspace : IDisposable
         }
     }
 
-    /// <summary>Release the packing buffers. Safe to call more than once.</summary>
+    /// <summary>Release the packing buffers and any retained complex scratch. Safe to call more than once.</summary>
     public void Dispose()
     {
         lock (_gate)
         {
             _dispatch?.Dispose();
             _dispatch = null;
+            _complexScratch = null;
         }
     }
 }

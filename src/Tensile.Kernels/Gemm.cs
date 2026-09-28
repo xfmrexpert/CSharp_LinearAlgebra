@@ -45,21 +45,19 @@ internal sealed unsafe class GemmScratch : IDisposable
     /// micro-panel stay resident in L1/L2, MC so the packed A block fits L2,
     /// NC so the packed B block fits L3.
     ///
-    /// MC=144 is measured, on a 12700H P-core: it beat the previous
-    /// placeholder MC=288 by 9.5% at n=2048, in both sweep directions
-    /// (+9.6% ascending, +9.5% descending). It is also what
+    /// MC=144 is measured, on a 12700H P-core, against the previous
+    /// placeholder MC=288, and the win is small: ~4% at n=512 and 0-2% at
+    /// n=128 and n=2048, positive in eleven of twelve cells across both
+    /// sweep directions and both the driver and the dispatch. An earlier
+    /// sweep put it 9.5% ahead at n=2048 in both directions; that did not
+    /// reproduce in a later sitting (CLAUDE.md finding 7). It is also what
     /// <see cref="ParallelGemmScratch"/> derives from cache geometry, so the
-    /// two paths now agree.
+    /// two paths agree. MC has only ever been measured at these two values.
     ///
-    /// KC=384 is NOT measured and stays as it was. Over the same sweep,
-    /// KC=256 and KC=384 came out within 1% of each other at every size, in
-    /// both directions -- inside the noise, so there is nothing to choose
-    /// between them and changing it would be unmeasured churn.
-    ///
-    /// At n=128 and n=512 no block-size choice made a reliable difference at
-    /// all: the ascending sweep showed MC=144 ahead by 12-14% there, and the
-    /// descending sweep showed it 1% behind. That reversal is thermal drift,
-    /// not blocking -- see CLAUDE.md finding 7.
+    /// KC=384 stays as it was: KC=256 came out within 1% of it at every size,
+    /// in both directions -- inside the noise, so there is nothing to choose
+    /// between them and changing it would be unmeasured churn. NC=4096 has
+    /// never been varied.
     /// </summary>
     public static GemmScratch For<TKernel>() where TKernel : struct, IMicroKernel =>
         For<TKernel>(mc: 144, kc: 384, nc: 4096);

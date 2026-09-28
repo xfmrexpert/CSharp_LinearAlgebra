@@ -479,13 +479,20 @@ This matters for line models specifically: in a product such as
 ZY = (R + jωL)(G + jωC), the loss terms ω(LG + RC) land in the small imaginary
 part, next to a dominant −ω²LC. 3M would lose the damping first.
 
-The cost of 4M is temporaries — real and imaginary copies of both operands and
-of the product, allocated on every call. From n≈512 up that is a modest
-overhead (4M measured at 4.7–4.9× one real product on a development container,
-against an ideal 4.0, and about 1.6× faster than the embedded route). **At
-small n it dominates**: at n=128 the same measurement put 4M at 9.1×, slower
-than embedding. Removing the per-call allocation is an open item, pending a
-measurement on the verification machine; `ComplexGemmBenchmarks` is the
+The cost of 4M is splitting: real and imaginary copies of both operands and of
+the product. The workspace keeps those buffers between products, so a run of
+products — the squarings of an exponential, the trailing updates of a
+factorization — allocates them once. Retention is capped at 2²¹ elements
+(16 MiB, a 512×512 complex product in full) because the buffers grow with the
+problem and `Workspace.Shared` lives as long as the process; a larger product
+gets buffers of its own for that call, and a workspace that has run complex
+products may hold up to that much more memory than one that has not. Disposing
+a workspace releases them.
+
+With the buffers retained, 4M measured 4.4× one real product at n=128 and 4.0×
+at n=512 on a development container, against an ideal 4.0, and 1.8–2.0× faster
+than the embedded route. Those are noisy figures from a short job; the
+verification-machine measurement is outstanding. `ComplexGemmBenchmarks` is the
 instrument.
 
 ### Exponentials

@@ -26,19 +26,26 @@ namespace Tensile;
 /// transient model exists to get right; the test suite has a case built to
 /// fail under 3M.
 ///
-/// The cost of splitting is the temporaries: real and imaginary copies of A,
-/// B and the product, O(mk + kn + mn) doubles against O(mnk) of work. Splitting
-/// inside the packing routines instead -- BLIS's 1M method -- would remove
-/// them, and is deliberately left until profiling says it matters.
+/// The cost of splitting is the buffers: real and imaginary copies of A, B
+/// and the product, O(mk + kn + mn) doubles against O(mnk) of work. The
+/// workspace keeps them between products (<see cref="ComplexScratch"/>), up to
+/// a cap, so a run of products -- the trailing updates of a factorization, the
+/// squarings of an exponential -- allocates once rather than every call. What
+/// remains is the copying: one pass to split, one to combine, and each part
+/// packed twice, once for each product it takes part in. Splitting inside the
+/// packing routines instead -- BLIS's 1M method -- would remove the passes and
+/// halve the B packing, and is deliberately left until profiling says the
+/// remainder matters.
 /// </summary>
 internal readonly struct ComplexKernels : IElementKernels<Complex>
 {
     /// <inheritdoc/>
     /// <exception cref="AllocationLimitException">
-    /// A temporary exceeds <see cref="TensileLimits.MaxElements"/>. Each has
+    /// A split buffer exceeds <see cref="TensileLimits.MaxElements"/>. Each has
     /// the element count of an operand or of C, so this happens only if C is a
     /// caller's view larger than the library would allocate.
     /// </exception>
+    /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
     public static void Multiply(
         Workspace workspace,
         ReadOnlyMatrixView<Complex> a,
@@ -67,21 +74,37 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
         // through, and the four products come out as zeros.
         if (c.Rows == 0 || c.Columns == 0) return;
 
-        var (ar, ai) = Split(a);
-        var (br, bi) = Split(b);
+        int m = a.Rows, k = a.Columns, n = b.Columns;
 
-        var real = new Matrix<double>(a.Rows, b.Columns);
-        var imaginary = new Matrix<double>(a.Rows, b.Columns);
+        // Held across all four products and the combine: the buffers belong
+        // to the workspace, and another caller's product must not land in
+        // them between two of ours. Taken once; the products go through
+        // MultiplyHeld, which does not take it again.
+        lock (workspace.Gate)
+        {
+            SplitBuffers buffers = workspace.ComplexScratch.Acquire(m, k, n);
 
-        workspace.Multiply(ar.ReadOnlyView, br.ReadOnlyView, real.View);
-        workspace.Multiply(ai.ReadOnlyView, bi.ReadOnlyView, real.View, alpha: -1.0, beta: 1.0);
-        workspace.Multiply(ar.ReadOnlyView, bi.ReadOnlyView, imaginary.View);
-        workspace.Multiply(ai.ReadOnlyView, br.ReadOnlyView, imaginary.View, alpha: 1.0, beta: 1.0);
+            MatrixView<double> ar = buffers.RealA(m, k), ai = buffers.ImaginaryA(m, k);
+            MatrixView<double> br = buffers.RealB(k, n), bi = buffers.ImaginaryB(k, n);
+            MatrixView<double> real = buffers.RealProduct(m, n), imaginary = buffers.ImaginaryProduct(m, n);
 
-        // C is written only here, after all four products have succeeded, so a
-        // failure in any of them -- a disposed workspace, a refused temporary --
-        // leaves the caller's destination exactly as it was.
-        Combine(real, imaginary, c, alpha, beta);
+            // Every buffer may hold a previous product's values. Split writes
+            // every element of the four operand parts, and the first product
+            // into each part of the result has beta = 0, which overwrites --
+            // so nothing stale is ever read, and nothing needs zeroing.
+            Split(a, ar, ai);
+            Split(b, br, bi);
+
+            workspace.MultiplyHeld(ar, br, real, alpha: 1.0, beta: 0.0);
+            workspace.MultiplyHeld(ai, bi, real, alpha: -1.0, beta: 1.0);
+            workspace.MultiplyHeld(ar, bi, imaginary, alpha: 1.0, beta: 0.0);
+            workspace.MultiplyHeld(ai, br, imaginary, alpha: 1.0, beta: 1.0);
+
+            // C is written only here, after all four products have succeeded, so a
+            // failure in any of them -- a disposed workspace, a refused buffer --
+            // leaves the caller's destination exactly as it was.
+            Combine(real, imaginary, c, alpha, beta);
+        }
     }
 
     /// <inheritdoc/>
@@ -126,12 +149,9 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
         return best;
     }
 
-    /// <summary>The real and imaginary parts of a complex view, as two packed real matrices.</summary>
-    private static (Matrix<double> Real, Matrix<double> Imaginary) Split(ReadOnlyMatrixView<Complex> source)
+    /// <summary>The real and imaginary parts of a complex view, written into two real views of its shape.</summary>
+    private static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
     {
-        var real = new Matrix<double>(source.Rows, source.Columns);
-        var imaginary = new Matrix<double>(source.Rows, source.Columns);
-
         for (int j = 0; j < source.Columns; j++)
         {
             ReadOnlySpan<Complex> column = source.Column(j);
@@ -144,8 +164,6 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
                 im[i] = column[i].Imaginary;
             }
         }
-
-        return (real, imaginary);
     }
 
     /// <summary>
@@ -159,7 +177,7 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
     /// so a destination full of NaN still yields a finite result.
     /// </summary>
     private static void Combine(
-        Matrix<double> real, Matrix<double> imaginary, MatrixView<Complex> c, Complex alpha, Complex beta)
+        ReadOnlyMatrixView<double> real, ReadOnlyMatrixView<double> imaginary, MatrixView<Complex> c, Complex alpha, Complex beta)
     {
         bool unitAlpha = alpha == Complex.One;
         bool realAlpha = alpha.Imaginary == 0.0;
@@ -168,8 +186,8 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
 
         for (int j = 0; j < c.Columns; j++)
         {
-            ReadOnlySpan<double> p = real.ReadOnlyView.Column(j);
-            ReadOnlySpan<double> q = imaginary.ReadOnlyView.Column(j);
+            ReadOnlySpan<double> p = real.Column(j);
+            ReadOnlySpan<double> q = imaginary.Column(j);
             Span<Complex> target = c.Column(j);
 
             for (int i = 0; i < target.Length; i++)

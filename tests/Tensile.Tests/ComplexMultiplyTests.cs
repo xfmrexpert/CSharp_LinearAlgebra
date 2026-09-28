@@ -280,7 +280,7 @@ public class ComplexMultiplyTests
     /// <summary>
     /// The destination is written only after all four real products succeed,
     /// so a failure part-way leaves it exactly as it was. A disposed workspace
-    /// fails on the first product, after the operands have been split.
+    /// fails before any buffer is handed out.
     /// </summary>
     [Fact]
     public void AFailedProductLeavesTheDestinationUntouched()

@@ -15,7 +15,10 @@ namespace Tensile.Benchmarks;
 ///   efficiency, and the excess over 4.0 is what the split and combine cost.
 ///   That excess is the number that decides whether BLIS's 1M method --
 ///   splitting inside the packing instead of into temporaries -- is worth
-///   writing.
+///   writing. The workspace retains the split buffers up to 2^21 elements,
+///   so at N=128 and N=512 the excess is copying alone and the allocation
+///   column reads zero; at N=1024 the six buffers (6.3M elements) are over
+///   the cap and are allocated per call, so that row includes allocation.
 /// - <see cref="Complex4M"/> is the product under test, through the public
 ///   API.
 /// - <see cref="EmbeddedReal"/> is the real product of order 2N that the

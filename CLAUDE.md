@@ -40,15 +40,13 @@ the managed-vs-native question is a first-class motivation, not just a means.
 A library plus tests, benchmarks and a diagnostics tool, `net10.0`,
 column-major throughout, unit row stride. `Matrix<T>` is generic over
 `unmanaged, INumberBase<T>`, so storage, views and the structure vocabulary
-already work for any numeric type; arithmetic is double-only and lives in
-extensions on the closed `Matrix<double>`, so adding a type is additive.
-Complex is arriving one primitive at a time: complex products are native (the
-4M method over the real GEMM, `ComplexKernels`), so are LU and its solves (one
-blocked algorithm written over the element type, `BlockedLu`, behind a single
-`LuDecomposition<T>`), so is the 1-norm estimator and the condition estimate
-built on it (one `NormEstimate` core over the element type), and so are the
-exponentials: `Expm` and `Expmv` are each one algorithm over the element type,
-run natively for `double` and `Complex`. The real embedding they were first
+work for any numeric type. Arithmetic exists for `double` and `Complex`, as
+extensions on the closed types over a generic interior: complex products are
+the 4M method over the real GEMM (`ComplexKernels`); LU (`BlockedLu`, behind
+one `LuDecomposition<T>`), the 1-norm estimator and condition estimate (one
+`NormEstimate` core), and both exponentials (`Expm`, `Expmv`) are each one
+algorithm over `IElementKernels<T>`, run natively for both types. Real LU keeps
+its tuned kernel path. The real embedding complex exponentials were first
 computed through is kept, internally, as their oracle.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
@@ -108,6 +106,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
 | `tests/Tensile.Tests/` | xunit.v3, 1636 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `bench/run-measurements.sh` | Runs every measurement the open items wait on, each pinned or unpinned as it requires and at `--iterationCount 31`, into a dated results directory |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route, native complex `Expm`/`Expmv` against the embedded route |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy (real and complex), expm accuracy against a Taylor oracle, expmv cost against expm by operation count, native complex exponentials against the embedded route; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -596,6 +595,118 @@ Residuals: `||PA-LU||_F / ||A||_F` worst 1.80e-15, `||Ax-b||_inf /
 straddling block boundaries), two block sizes, padded and unpadded strides,
 well- and ill-conditioned inputs.
 
+## Matrix exponential and its action
+
+Development container (4-core virtualised AVX-512 host); deterministic
+`tensile-diag` reports, so these reproduce exactly, and the error figures are
+the ones that matter, not the host.
+
+**`expm` accuracy** against an independent 40-term Taylor oracle applied at
+`||A||/2^s <= 1/32` (which shares nothing with the Padé path but GEMM), on
+random matrices chosen to reach every branch:
+
+| n | 8 | 8 | 8 | 8 | 8 | 8 | 32 | 32 | 64 | 64 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `||A||_1` | 0.001 | 0.05 | 0.4 | 1.2 | 6 | 40 | 0.8 | 12 | 2.5 | 100 |
+| degree / s | 3/0 | 5/0 | 7/0 | 9/0 | 13/0 | 13/3 | 7/0 | 13/1 | 9/0 | 13/4 |
+| rel. diff | 2.2e-16 | 4.4e-16 | 1.8e-15 | 1.7e-14 | 2.3e-14 | 2.0e-13 | 1.0e-14 | 1.1e-13 | 3.8e-14 | 4.0e-13 |
+
+Error grows with the squaring count, not with the degree — the shape
+backward stability predicts. Beyond the oracle, the coefficient tables are
+re-derived from their closed forms in the suite and closed-form exponentials
+pin the analytic cases.
+
+**`expmv` against `expm`, by operation count** (the one machine-independent
+performance quantity), one column unless stated:
+
+| n | `||A||_1` | columns | degree x s | applications | flop ratio |
+| --- | --- | --- | --- | --- | --- |
+| 64 | 1 / 10 / 100 | 1 | 18x1 / 40x2 / 55x2 | 12 / 34 / 81 | 33.9x / 13.9x / 9.0x |
+| 256 | 1 / 10 / 100 | 1 | 18x1 / 40x2 / 55x1 | 10 / 28 / 39 | 162.7x / 67.2x / 74.5x |
+| 1000 | 10 / 100 | 1 | 40x2 / 40x1 | 26 / 30 | 282.7x / 378.4x |
+| 256 | 10 | 8 / 64 | 19x1 | 17 | 13.9x / **1.8x** |
+
+The advantage is roughly n/n0, so `expmv` is for narrow B; a wide one should
+form the exponential once. The flop ratio overstates the wall-clock one,
+because `expm` spends its flops in GEMM near peak and `expmv` in memory-bound
+panel products. `expmv`'s own accuracy is verified against `expm(A)*B`,
+itself independently verified.
+
+## Complex
+
+All on the development container, BenchmarkDotNet short job,
+single-threaded workspace: read within-run ratios, not times. **None of it has
+been measured on the 12700H.**
+
+**4M against 3M, accuracy of Im(AB)** when the imaginary parts are a factor
+rho below the real ones — the case 3M exists to lose, and the reason products
+are 4M (see design decisions):
+
+| rho | 1e3 | 1e6 | 1e9 | 1e12 |
+| --- | --- | --- | --- | --- |
+| 4M, relative error | 6e-14 | 5e-14 | 3e-14 | 9e-14 |
+| 3M, relative error | 9e-11 | 1e-7 | 1e-4 | 0.19 |
+
+The suite pins it both ways: 4M passes the small-component bound, and a
+companion test computes 3M and asserts it fails.
+
+**4M against one real GEMM of the same order** (`ComplexGemmBenchmarks`; ideal
+4.0, the embedded route's ideal 8.0), before and after the workspace began
+retaining the six split buffers (`ComplexScratch`, capped at 2^21 elements):
+
+| n | before | after | embedded, same run | allocated per call |
+| --- | --- | --- | --- | --- |
+| 128 | 9.13 | **4.43** | 7.83 | 788 KB -> 0 |
+| 512 | 4.88 | **4.01** | 7.94 | 12.6 MB -> 0 |
+| 1024 | 4.65 | 5.42 +- 0.60 | 8.19 | 50.3 MB, over the cap |
+
+The n=128 inversion was allocation, not copying: six zeroed pinned-heap
+temporaries per call. At n=512 what remains over 4.0 is inside the noise, which
+bounds what BLIS's 1M method (splitting inside packing) could still win there.
+n=1024's two figures are from different sittings and not comparable.
+
+**Native exponentials against the embedded oracle**, parameters and agreement
+(`tensile-diag`, random complex matrices, one column for `expmv`, t = 1):
+
+| n | `||A||_1` | `expm` native / embedded (degree/s) | rel. diff | `expmv` native / embedded (m x s, applications) | rel. diff |
+| --- | --- | --- | --- | --- | --- |
+| 16 | 1 | 7/0 / 9/0 | 8.4e-16 | 18x1, 13 / 20x1, 13 | 1.7e-16 |
+| 16 | 20 | 13/2 / 13/3 | 9.4e-16 | 45x3, 67 / 55x3, 67 | 1.0e-15 |
+| 64 | 5 | 13/0 / 13/1 | 1.7e-15 | 40x1, 17 / 45x1, 17 | 5.0e-16 |
+| 64 | 100 | 13/5 / 13/5 | 5.3e-15 | 50x2, 76 / 50x2, 76 | 2.9e-15 |
+| 128 | 30 | 13/3 / 13/3 | 8.6e-15 | 40x5, 80 / 55x4, 68 | 5.6e-16 |
+| 128 | 300 | 13/6 / 13/7 | 1.6e-14 | 55x4, 157 / 55x4, 157 | 1.6e-15 |
+
+Native `expm` never took more squarings, and took one fewer in three cases —
+it reads complex norms, where the embedding reads real ones up to sqrt(2)
+larger. The one `expmv` row where native applied the operator more (80 against
+68) is the parameter search doing its job: it minimises the bound m*s (200
+against 220), not the applications left after early exits, and the real
+algorithm makes the same trade.
+
+**Wall-clock** (`ComplexExponentialBenchmarks`, embedded time over native):
+
+| n | `Expm` | `Expmv`, one column | bytes allocated, native over embedded |
+| --- | --- | --- | --- |
+| 64 | **1.26x** | 0.95x (noise: 8% StdDev) | 0.51 `Expm`, 0.69 `Expmv` |
+| 256 | **1.49x** | **1.47x** | 0.49 `Expm`, 0.47 `Expmv` |
+
+**The first native version was no faster than the embedding**, despite half
+the flops, and three fixes were measured into it. (a) The `ell` test took a
+complex modulus of every entry on each of its 2m+1 = 27 passes — about a fifth
+of an n=256 exponential, since `Complex.Abs` is a robust hypot; the moduli are
+now taken once. (b) `ComplexDenseOperator` split A into two pinned-heap
+matrices per construction (64 us at n=64, one per estimated power); now the
+ordinary heap, 17 us, and its four panel products are two, one per real part
+of A over the stacked [Xr | Xi]. (c) The dense `expmv` search estimated every
+interior d(p) twice; each is now cached, which helps the real path too with
+bit-identical parameters. What still keeps it short of 2x, measured: the Padé
+solve with n right-hand sides (~20-25% of either route at n=256, the same cost
+on both), complex LU's managed panel (as much as the real kernel LU on twice
+the order), and the complex modulus wherever a norm is taken.
+
+The complex estimator's exactness by ensemble is in finding 8.
+
 ---
 
 # Findings worth not rediscovering
@@ -980,346 +1091,122 @@ well- and ill-conditioned inputs.
 
 # Open items
 
-- ~~**`Gemm.cs` uses placeholder MC=288, KC=384.**~~ *Closed, on the second
-  attempt and with a much smaller number than the first.* The 09-19 sweep's
-  headline — MC=144 ahead 9.5% at n=2048, agreeing in both directions — did
-  not reproduce; the 09-21 re-run, both arms and both directions at 31
-  iterations, measures that size as a wash. What survives is a consistent
-  small win: eleven of twelve cells positive, all six positive in the
-  descending run where MC=144 runs last and hottest, ~4% at n=512 and ~0-2%
-  elsewhere. MC=144 stays. KC is settled at 384. **What is still open is
-  narrower than before**: MC has been measured at exactly two values and three
-  sizes, NC=4096 has never been varied at all, and a size-dependent MC has
-  never been tried.
-- ~~**Small-n threading.**~~ *Mostly closed.* The dispatch now keeps
-  everything below 2^24 of work on the serial path, which is measured correct
-  at every size tested from n=64 to n=192 (serial ahead 7-17%). n=128 in
-  particular is 2.1e6 of work and firmly serial. What remains unexamined is
-  the *other* small-n control, the worker-count clamp inside
-  `ParallelGemm.Multiply` — `Math.Clamp((int)(work / 8_000_000), 1,
-  scratch.MaxThreads)`. Its divisor of 8M is still derived rather than
-  measured, and it now only takes effect above 2^24, where it caps a 2^24
-  product at 2 threads. Whether that is the right cap is untested.
-- ~~**`GemmDispatch.ParallelThreshold` (4e6 flops) is derived, not measured.**~~
-  *Closed.* Measured in both directions with eleven shapes and zero
-  disagreements; the crossover is 2^24 and the threshold is now set there. The
-  two shape families turned out to agree exactly, so no shape term is needed.
-  See "Serial vs threaded" above. What is still unmeasured is the band
-  (7.08e6, 1.68e7] itself — no shape was tested inside it, so the true
-  break-even could be anywhere in there, and 2^24 is the conservative choice
-  rather than the optimal one.
-- ~~**LU's block size is settled only above n=1024.**~~ *Closed.* Run both
-  ways: nb=32 wins at n=256 and n=512 in both directions (and in the
-  descending one it wins while running last and hottest), nb=64 wins at
-  n=1024 both ways, and n=2048 is a tie. `Lu.DefaultBlockSizeFor` is now
-  size-dependent — 32 below order 1024, 64 at or above — where the flat nb=64
-  had been costing 11-13% on smaller factorizations. What is still unmeasured
-  is the crossover's exact location, which lies somewhere in (512, 1024].
-- ~~**The 8-18% gap between driving the GEMM driver and driving the dispatch is
-  unexplained.**~~ *Closed: it was never there.* Measured with both arms in one
-  class at each MC — six pairs, dispatch/driver 0.966 to 1.021, sign flipping,
-  every one inside its own StdDev. It was drift between two processes. See
-  finding 12, which is the general form and cost two conclusions before it was
-  understood.
-- ~~**The thread sweep's tail needs a descending run.**~~ *Closed.* Run both
-  ways and averaged: peak at 6 threads (n=2048) and 8 (n=512), identical in
-  both directions; decline past the peak is 12%, not the 17-19% the ascending
-  run alone reported. What remains unmeasured is the E-core / P-core / SMT
-  decomposition of the old table — this sweep varied only the worker count,
-  not which cores it was allowed to use.
-- **The LU phase breakdown is single-core and from the old container.** It is
-  now load-bearing — the Amdahl argument that explains LU's 46% of threaded
-  GEMM rests on the 65/14/10/11 split — so re-taking it threaded on this
-  machine is the highest-value LU measurement outstanding. The instrumentation
-  for it has landed (`LuPhaseTimings`, reported by `tensile-diag`); what is
-  missing is a run on the 12700H, pinned and unpinned, which is two invocations
-  and no rebuild. See "LU" above for how to read the report.
+- **Nothing since the complex work has been measured on the 12700H, and
+  several decisions wait on it.** `bench/run-measurements.sh` runs all of it
+  in one sitting, each pinned or not as it must be:
+  - the GEMM-against-BLIS parity table, re-taken with both sides in one class
+    (`GemmVsBlisBenchmarks`), since the recorded decimal places are
+    cross-process ratios good to about ten points (finding 12);
+  - the **LU phase breakdown**, pinned and unpinned — load-bearing, because
+    the Amdahl argument for LU's 45% of threaded GEMM rests on a 65/14/10/11
+    split measured single-core on the old container, and it decides whether
+    recursive panel factorization is worth writing (see "LU" above for how to
+    read the report and its `instrument` and `unattr` columns);
+  - `ComplexGemmBenchmarks` (4M's ratios, and whether the 2^21 retention cap
+    is right — a memory-for-speed policy set to cover the target
+    application's few-hundred order, not measured);
+  - `ComplexExponentialBenchmarks`, native against embedded.
+- **Parameters measured only in their own neighbourhood.** Each is settled
+  where it was measured and unexplored beyond:
+  - serial MC has been measured at two values (144, 288) and three sizes;
+    NC=4096 has never been varied; a size-dependent MC has never been tried;
+  - `ParallelThreshold` = 2^24 is the conservative end of a crossover in
+    (7.08e6, 1.68e7] — no shape inside that band was tested;
+  - the worker-count clamp in `ParallelGemm.Multiply`,
+    `Math.Clamp((int)(work / 8_000_000), 1, scratch.MaxThreads)`, is derived,
+    not measured; above 2^24 it caps a 2^24 product at 2 threads;
+  - LU's nb=32/64 crossover lies somewhere in (512, 1024];
+  - complex LU's block size is the real default, taken on trust, though its
+    managed panel is slower per flop than the real kernel's;
+  - the thread sweep varied only the worker count, not which cores (P, E,
+    SMT) it could use.
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
   LAPACK's `dlacn2`/`zlacn2`.** It is verified by invariants instead — see
   finding 8 — which is strong evidence but not the same thing. The complex
   form is pinned to the real one exactly on real inputs, which makes the real
   cross-validation, when it happens, cover most of it.
-- **The complex dense operator is internal.** `EstimateOneNorm` on a complex
-  matrix and the native complex exponentials use `ComplexDenseOperator`,
-  reached through `IElementKernels<T>.PowerOperator`, which snapshots A as
-  split real and imaginary parts; the public `DenseMatrixOperator` is
-  real-only and references its matrix. The exponentials turned out not to
-  need a public complex operator at all — they reach the element type's own
-  through the kernels — so a public one waits for a caller who wants to hand
-  a dense complex operator to `NormEstimate.Of` directly, and the
-  snapshot-or-reference question with it.
+- **`expm` has no Schur-Parlett fallback** for the badly nonnormal case, and
+  its estimator probe count is left at the default 2 rather than tuned.
+- **The real `expm` and `expmv` have no benchmark.** Their cost is recorded by
+  operation count only — the 15-25 products per `expm` call is arithmetic —
+  and only the complex routes have a wall-clock benchmark, and that one
+  against the embedding rather than in absolute terms.
+- **The Padé solve is substitution with n right-hand sides.** `expm` solves
+  q(A) X = p(A) for an n x n X, 2n^3 flops of triangular substitution after
+  the LU, and the substitution — real kernel and complex generic alike — is
+  column by column, not a GEMM-based blocked TRSM. ~20-25% of an n=256
+  exponential on either route. See next steps.
+- **`expmv` is for narrow B, and does not know it.** The flop advantage over
+  `expm` falls to 1.8x at 64 columns (see "Matrix exponential" above), and
+  `Expmv` will happily do the slow thing on a wide B. Whether it should switch
+  to `Expm` above some n0/n wants the wall-clock crossover, not the flop one.
 - **The estimator's `PanelProduct` applications are O(n^2 t) with no
-  blocking.** Fine at the sizes that matter for `dgecon`, and now load-bearing
-  for `expmv`, whose whole inner loop is this path. It is the right primitive
-  for a narrow B — packing cannot amortise over one column — and the wrong one
-  for a wide B, where GEMM would win. The crossover is unmeasured, which is
-  why `Expmv` takes no `Workspace`: there is nothing for it to configure on
-  the panel path, and taking one would imply otherwise.
-- **`expmv` is for narrow B, and the cost table says where that stops.**
-  Measured by operation count: at n=256 the flop ratio against `Expm` is 163x
-  at one column, 13.9x at eight and 1.8x at sixty-four. `Expmv` does not
-  detect this and will happily do the slow thing on a wide B. Whether it
-  should switch to `Expm` above some n0/n is a policy question that wants the
-  wall-clock crossover, not the flop one, so it needs the verification
-  machine.
-- ~~**What the secure-by-design migration cost is unmeasured.**~~ *Closed.*
-  Measured on the 12700H: nothing, at any size. +7.2%, -6.7%, +0.5% at
-  n=128/512/2048 — noise around zero, with the shipped path executing last and
-  hottest in every group. See "What the secure-by-design migration cost"
-  above. The section 9 guardrail is satisfied.
-- ~~**4M allocates its temporaries per call.**~~ *Closed for the sizes that
-  matter, by option 1 of two.* The six split buffers (real and imaginary parts
-  of A, B and the product) now live in the `Workspace` (`ComplexScratch`) and
-  are reused; the complex product holds the workspace lock once, across the
-  split, all four products and the combine, and runs the products through
-  `MultiplyHeld` so the lock is never re-entered. Nothing is zeroed on reuse:
-  the split writes every operand element and the first product into each
-  result part has beta = 0. Retention is capped at 2^21 elements (16 MiB,
-  a 512x512 complex product in full), because these buffers scale with the
-  problem and `Workspace.Shared` lives as long as the process; a product
-  over the cap gets buffers of its own for that call, on the ordinary heap
-  rather than the pinned one.
-
-  Measured on the development container (BDN short job, single-threaded
-  workspace, StdDev up to 15%, so within-run ratios only), 4M over one real
-  GEMM of the same order:
-
-  | n | before | after | embedded route, same run | allocated per call |
-  | --- | --- | --- | --- | --- |
-  | 128 | 9.13 | **4.43** | 7.83 | 788 KB -> 0 |
-  | 512 | 4.88 | **4.01** | 7.94 | 12.6 MB -> 0 |
-  | 1024 | 4.65 | 5.42 +- 0.60 | 8.19 | 50.3 MB, over the cap |
-
-  n=128 no longer inverts: 4M is now 1.8x faster than embedding there, which
-  is the hypothesis — allocation, not copying, dominated at small n —
-  confirmed on this host. At n=512 what remains over the ideal 4.0 is inside
-  the noise, which bounds what option 2 (BLIS's 1M, splitting inside the
-  packing) could still win at that size: very little. n=1024 is over the cap
-  and still allocates; its after-figure is a different sitting from its
-  before-figure and the two are not comparable (finding 12). **Still open**:
-  the 12700H numbers, pinned at `--iterationCount 31`, and whether the cap is
-  right — it is a memory-for-speed policy, set to cover the target
-  application's few-hundred order, not measured.
-- **Complex LU is unmeasured.** No benchmark, and its block size is the real
-  factorization's measured default, taken on trust: the complex panel is
-  managed code, slower per flop than the real kernel's, which may move the
-  optimum. Its trailing updates are 4M products and so inherit the
-  split-buffer cap: a trailing block over 2^21 split elements allocates per
-  update.
-- **The Padé solve is substitution with n right-hand sides.** `expm`
-  solves q(A) X = p(A) for an n x n X, which is 2n^3 flops of triangular
-  substitution after the LU — and the substitution, real kernel and complex
-  generic alike, is column-by-column, not a GEMM-based blocked TRSM. On the
-  development container it is ~20-25% of an n=256 exponential on either
-  route. A blocked TRSM whose off-diagonal updates go through GEMM would
-  move most of it to the kernel's speed, for real LU solves generally, not
-  only here. Unmeasured on the 12700H.
+  blocking.** Load-bearing for `expmv`, whose whole inner loop is this path.
+  Right for a narrow B, where packing cannot amortise; wrong for a wide one,
+  where GEMM would win. The crossover is unmeasured, which is why `Expmv`
+  takes no `Workspace`: there is nothing for it to configure on this path.
 - **Complex magnitudes are robust and slow.** `ComplexKernels.Magnitude` is
-  `Complex.Abs`, a scaled hypot, measured several times a real `Math.Abs`
-  per element. It sits in every complex norm, the estimator's column norms
-  and signs, and `expmv`'s termination test. A fast path (plain
-  sqrt(re^2 + im^2) when both parts are in the safe range, hypot otherwise)
-  would keep the robustness; not written, since no measurement yet says a
-  norm is what bounds a real workload.
+  `Complex.Abs`, a scaled hypot, several times a real `Math.Abs` per element,
+  and it sits in every complex norm, the estimator's column norms and signs,
+  and `expmv`'s termination test. A fast path (plain sqrt(re^2 + im^2) when
+  both parts are in the safe range, hypot otherwise) would keep the
+  robustness; not written, since nothing measured yet says a norm bounds a
+  real workload.
+- **The complex dense operator is internal.** `ComplexDenseOperator`, reached
+  through `IElementKernels<T>.PowerOperator`, snapshots A as split parts; the
+  public `DenseMatrixOperator` is real-only and references its matrix. The
+  exponentials need no public complex operator — they reach the element
+  type's own through the kernels — so one waits for a caller who wants to
+  hand a dense complex operator to `NormEstimate.Of`, and the
+  snapshot-or-reference question with it.
 - **The triangular structure solves are real-only**, and still say
-  `SolveTransposed` where the decomposition now says `SolveAdjoint`. When
-  they gain a complex path the rename should follow.
+  `SolveTransposed` where the decomposition says `SolveAdjoint`. When they
+  gain a complex path the rename should follow.
 - **`Workspace` serialises every operation on one lock.** Correct and cheap
-  against O(n^2) work, but it means concurrent independent solves on a shared
-  workspace queue. Only worth revisiting if a real workload wants many small
+  against O(n^2) work, but concurrent independent solves on a shared
+  workspace queue. Worth revisiting only if a workload wants many small
   factorizations in parallel, where per-thread workspaces are the answer.
 - **Pinned-object-heap storage is never compacted.** A hot loop creating
   thousands of tiny matrices fragments the POH. Fine for a solver holding a
   handful of large operands; a pooled allocator behind `Storage` is the fix if
-  a churn-heavy workload ever appears, and is not written.
+  a churn-heavy workload appears. Library temporaries that die with the call
+  are on the ordinary heap for this reason.
 - **No `SymmetricPositiveDefinite` structure**, because there is no Cholesky to
   dispatch to. This is the missing half of the type-system argument.
 
 # Next steps, in priority order
 
-`normest1`, the LU/`ParallelGemm` routing, the test project, CI and the licence
-are done, and so is the library shaping: `src`/`tests`/`bench`/`tools` layout,
-a documented public API, and structure-typed dispatch. What remains:
+Done, and recorded under "Measured results" and "Design decisions":
+`normest1`; the LU/`ParallelGemm` routing; the test project, CI, fuzzing and
+the licence; the library shaping (`src`/`tests`/`bench`/`tools`, a documented
+public API, structure-typed dispatch); the secure-by-design migration; `expm`
+and `expmv`; the 12700H LU and threading campaigns; and complex support —
+4M products, LU and solves, the norm and condition estimates, and native
+exponentials, each one algorithm over the element type, with the real
+embedding kept as the oracle.
 
-1. ~~**`expm`**~~ *Done.* Al-Mohy & Higham (2009), the full degree
-   3/5/7/9/13 ladder with the `ell` correction, `Expm` on `Matrix<double>`.
-   The `||A^k||^(1/k)` estimates go through `DenseMatrixOperator` raised to a
-   power, so no power of A is formed to measure it — which is what that
-   parameter was built for. Verified three ways: the coefficient tables are
-   re-derived from their closed forms, closed-form exponentials pin the
-   analytic cases, and everything else is compared against an independent
-   Taylor oracle. Accuracy runs 2e-16 to 4e-13, degrading with the squaring
-   count and not with the degree, which is the shape backward stability
-   predicts. **What is not done**: no benchmark (so the 15-25 products
-   estimate is arithmetic, not measurement), no Schur-Parlett fallback for
-   the badly nonnormal case, and the estimator's probe count is left at the
-   default 2 rather than tuned for this use.
-2. ~~**`expmv`**~~ *Done.* Al-Mohy & Higham (2011), with the degree and
-   scaling chosen together to minimise applications. Two overloads: a dense
-   one that gets the trace shift and sharp `||A^k||^(1/k)` estimates, and a
-   matrix-free one over `ILinearOperator` that uses **only** `Apply` — no
-   transpose, no entries, no trace — which is what the interface split was
-   for. Verified against `Expm(A)*B`, which is itself independently verified,
-   so this got a far better oracle than `expm` had.
-
-   **The 100x estimate was low for the size that matters, and much too high
-   for a wide B.** Counted rather than timed (operation counts being the one
-   machine-independent performance quantity): with B a single column the flop
-   ratio against `Expm` is 34x at n=64, 163x at n=256 and 283-378x at n=1000.
-   But it falls off as B widens — at n=256 it is 13.9x at 8 columns and
-   **1.8x at 64**. The advantage is roughly n/n0, so `expmv` is for narrow B
-   and a wide one should form the exponential once instead. See "expmv is for
-   narrow B" under open items.
-
-   **What is not done**: no benchmark, and the flop ratio overstates the
-   wall-clock one because `Expm` spends its flops in GEMM near peak while
-   `Expmv` spends them in memory-bound panel products.
-3. ~~Re-take the LU table on the 12700H now that both sides of the ratio use
-   the same GEMM path, and sweep `GemmDispatch.ParallelThreshold` while
-   there.~~ *Done* — see "LU" and "Serial vs threaded" above.
-4. **Cholesky**, which is the cheapest way to make the structure vocabulary pay
+1. **Measure on the 12700H** (`bench/run-measurements.sh`). Not code, but the
+   phase breakdown decides item 4, and the complex numbers are all
+   container-only so far.
+2. **Cholesky**, which is the cheapest way to make the structure vocabulary pay
    off twice over: FEM mass and stiffness matrices are symmetric positive
    definite, and it is the third genuinely different `Solve` path.
-5. Recursive (Toledo) panel factorization to push LU from 65% toward 75-80% of
-   GEMM.
-6. **Complex support**, staged so the application is never blocked on the
-   kernels:
+3. **A blocked triangular solve whose off-diagonal updates go through GEMM.**
+   It would move most of the Padé solve — a fifth of every `expm` — and every
+   many-right-hand-side LU solve to the kernel's speed. If the application's
+   exponentials matter more than FEM right now, this goes before Cholesky.
+4. **Recursive (Toledo) panel factorization**, to push LU from 65% toward
+   75-80% of GEMM. After the phase breakdown, which says how much it can win.
+5. **Complex, only if profiling asks**: splitting inside packing (BLIS's 1M)
+   instead of into temporaries, a complex micro-kernel, or split storage
+   (`System.Numerics.Complex` is interleaved, which matches `zgemm` layout but
+   vectorises badly for element-wise work; start interleaved); and the fast
+   complex modulus above.
 
-   0. ~~Complex `Expm`/`Expmv` through the real embedding.~~ *Done.* Runs the
-      verified real algorithms on [[X, -Y], [Y, X]]. Accurate to 3e-16 -
-      2e-13 against an independent complex Taylor series, and the computed
-      result stays within 5e-15 of the complex block structure before the
-      projection. Costs 2x flops for `Expm`, 1x for `Expmv`, 2x memory, and a
-      parameter choice up to sqrt(2) conservative. See finding 15 for what the
-      first version got wrong.
-   1. ~~The API decisions.~~ *Decided and, where there was code to change,
-      done.* `ILinearOperator<T>` replaces the double-only interface outright;
-      `ITransposableOperator` became `IAdjointOperator<T>` with
-      `ApplyAdjoint`; the public algorithm surface stays concrete (`double`
-      and `Complex` overloads) over a generic interior. The generic interior's
-      shape — a static-abstract kernel interface per element type, dispatched
-      the way `IMicroKernel` and `IMatrixStructure` already are — is agreed in
-      principle but deliberately **not written yet**: it goes in with step 2,
-      where `ComplexKernels` gives it a second implementation to be shaped by
-      rather than guessed from one. The interface change also gave the
-      matrix-free complex `Expmv` the operator type it was waiting on, and
-      that overload is in.
-   2. ~~Complex GEMM via 4M.~~ *Done.* Four real GEMMs on the workspace's
-      own kernel and dispatch, 8n^3 real flops — exactly the complex count —
-      with no new micro-kernel and no new unsafe code. Verified per
-      micro-kernel, serial and threaded, against a componentwise error bound
-      of the conventional product's form. **Not 3M**, now measured rather
-      than argued: with imaginary parts a factor rho below the real parts,
-      4M holds Im(AB) to 3e-14 - 9e-14 relative error at every rho from 1e3
-      to 1e12, while 3M's error grows with rho — 9e-11, 1e-7, 1e-4, 0.19. The
-      suite pins it both ways: the small-component test passes for 4M, and a
-      companion test computes 3M and asserts it fails the same bound.
-
-      `IElementKernels<T>` went in with it, with `DoubleKernels` and
-      `ComplexKernels` implementing products, `Magnitude` (a real modulus —
-      the member generic math cannot supply, since `INumberBase<Complex>.Abs`
-      returns a `Complex`) and the exact norms. One generic contract test runs
-      against both. LU and the estimator's products join it in steps 3 and 4.
-
-      **Measured only on the development container so far** (BDN short
-      job, single-threaded workspace, StdDev up to 17%, so read the
-      within-run ratios, not the times): 4M over one real GEMM of the same
-      order first read 9.13 / 4.88 / 4.65 at n=128 / 512 / 1024 against an
-      ideal 4.0, with the embedded route at 7.4-7.7 against an ideal 8.0. The
-      n=128 inversion was six zeroed temporaries allocated on the pinned
-      object heap per call; with the split buffers retained by the workspace
-      it reads 4.43 at n=128 and 4.01 at n=512. See "4M allocates its
-      temporaries per call" under open items, now closed for sizes under the
-      retention cap; the 12700H measurement is still to come.
-   3. ~~Complex LU and solves.~~ *Done.* `LuDecomposition<T>` replaces the
-      real-only type; complex factors through `BlockedLu`, the blocked
-      algorithm written once over the element type, pivoting on |Re| + |Im|
-      as `izamax` does (a new `IElementKernels<T>.PivotMagnitude`, beside
-      `Conjugate` for the adjoint solve). Verified four ways: complex
-      residuals per micro-kernel; the double instantiation choosing exactly
-      the kernel LU's pivots on every shape; a real matrix factored as
-      complex pivoting exactly as the real kernel does; and solves agreeing
-      with a real solve on the embedding, and |det|^2 with the embedding's
-      determinant. **What is not done**: no benchmark, block size unmeasured.
-   4. ~~Complex `normest1`.~~ *Done.* One estimator core over the element
-      type, with A^H for A^T, unit-modulus signs x/|x| for +-1 (a new
-      `IElementKernels<T>.Sign`), and no parallel-column resampling, which only
-      applies to real sign vectors. The real overload performs the same
-      operations and random draws as before — `tensile-diag`'s estimator,
-      `expm` and `expmv` reports are identical before and after, over 1680
-      estimates. Complex `ReciprocalCondition` (zgecon), `EstimateOneNorm`,
-      `OneNorm` and `InfinityNorm` on `Matrix<Complex>` came with it; see
-      finding 8 for how it is verified.
-   5. ~~Native `expm`/`expmv`, verified against the embedding.~~ *Done.* Both
-      algorithms are written once over the element type — products, norms,
-      the estimator, the Padé LU, `exp` and real scaling all come through
-      `IElementKernels<T>` — and the complex entry points call the same cores
-      as the real ones. The real path's arithmetic is unchanged:
-      `tensile-diag`'s `expm`, `expmv` and estimator reports are identical
-      before and after, every degree, squaring count, application count and
-      error digit. One deliberate behaviour change: the Padé denominator is
-      now factored in place on the caller's workspace, where the real-only
-      code copied it and factored on `Workspace.Shared` whatever it was given.
-
-      The complex trace shift is now removed whole, real and imaginary parts
-      together, so finding 15's special handling is no longer needed outside
-      the oracle; the matrix-free complex overload uses its bound as given,
-      with no sqrt(2). The embedded `Expm`/`Expmv` stay in `ComplexEmbedding`
-      as the oracle, exactly as they shipped.
-
-      Verified against that oracle on every Padé degree and the scaled
-      branch, on every micro-kernel serial and threaded, dense and
-      matrix-free, with a large j*omega*I shift, on a strongly nonnormal
-      matrix, and against the complex Taylor series the existing suite
-      already had; a real matrix exponentiated as complex is real exactly.
-      `tensile-diag` on random complex matrices (n = 16-128, norms 1-300):
-      the answers agree to 2e-14 or better; native `Expm` never took more
-      squarings than embedded and took one fewer in three of six cases; native
-      `Expmv` matched or beat the embedded application count except once —
-      80 against 68 at n=128, where it chose 40x5 over 55x4. That is the
-      parameter search doing its job: it minimises the bound m*s (200 against
-      220), not the applications left after early exits, and the real
-      algorithm makes the same trade.
-
-      **The first native version was no faster than the embedding**, despite
-      half the flops, and three fixes were measured into it. (a) The `ell`
-      test took a complex modulus of every entry on every one of its 2m+1 =
-      27 passes; `Complex.Abs` is a robust hypot, and that was about a fifth
-      of an n=256 exponential. The moduli are now taken once. (b)
-      `ComplexDenseOperator` split A into two pinned-heap matrices on every
-      construction, 64 us at n=64, and the estimator builds one per power;
-      now the ordinary heap, 17 us. Its four panel products are now two, one
-      per real part of A over the stacked panel [Xr | Xi], so each part is
-      streamed once per step. (c) The dense `expmv` search estimated every
-      interior d(p) twice, because it asks for max(d(p), d(p+1)) at each p;
-      each is now estimated once and cached. That one helps the real path
-      too, with bit-identical parameters, since the estimator is
-      deterministic — the diag comparison still reads identical.
-
-      Measured afterwards on the development container
-      (`ComplexExponentialBenchmarks`, BDN short job, single-threaded,
-      within-run ratios only, embedded time over native):
-
-      | n | `Expm` | `Expmv`, one column | bytes allocated, native over embedded |
-      | --- | --- | --- | --- |
-      | 64 | **1.26x** | 0.95x (noise: 8% StdDev) | 0.51 `Expm`, 0.69 `Expmv` |
-      | 256 | **1.49x** | **1.47x** | 0.49 `Expm`, 0.47 `Expmv` |
-
-      Short of the 2x the flops suggest, for measured reasons: at n=256 the
-      Padé solve with n right-hand sides is ~20-25% of either route and costs
-      the same on both (see open items); complex LU's managed panel costs as
-      much as the real kernel LU on twice the order; and a complex modulus is
-      several times a real absolute value wherever a norm is taken.
-      **Not measured on the 12700H.**
-   6. Only if profiling asks: splitting inside packing (BLIS's 1M) instead of
-      into temporaries, a complex micro-kernel, or split storage.
-      `System.Numerics.Complex` is interleaved, which matches `zgemm` layout
-      but vectorises badly for element-wise work; start interleaved.
-
-   For a frequency sweep, parallelise across frequencies and run each
-   exponential serial: at 2N of a few hundred each 4M GEMM is already above
-   the 2^24 threshold and would thread internally, and the two levels would
-   fight over cores.
+For a frequency sweep, parallelise across frequencies and run each exponential
+serial: at 2N of a few hundred each 4M GEMM is already above the 2^24
+threshold and would thread internally, and the two levels would fight over
+cores.
 
 ## Deliberately deferred
 
@@ -1338,10 +1225,13 @@ than on things no BLAS-lineage library can express:
   because nothing would dispatch to it yet. Note the deliberate limit on what a
   structure claims — which triangle is *read*, not that the rest is zero —
   since packed LU makes the stronger reading impossible.
-- **One algorithm, every numeric type.** LAPACK maintains four hand-written
-  copies (s/d/c/z) that drift. Generic math means one LU instantiated for
-  `float`, `double`, `Complex`, `Half`, `BFloat16` — and double-double or
-  interval arithmetic for rigorous error bounds, which no .NET library offers.
+- **One algorithm, every numeric type** — *begun.* LAPACK maintains four
+  hand-written copies (s/d/c/z) that drift. Here LU, the norm estimator and
+  both exponentials are each one implementation over `IElementKernels<T>`,
+  instantiated for `double` and `Complex`. A further type — `float`, `Half`,
+  `BFloat16`, or double-double or interval arithmetic for rigorous error
+  bounds, which no .NET library offers — needs its element kernels, which
+  for a new precision means its own GEMM, and nothing else.
 - **Mixed precision as composable types** rather than bolted-on routines.
 - **Matrix functions as first-class**: `expm`, `logm`, `sqrtm`, phi-functions,
   `f(A)b`. LAPACK essentially lacks these; .NET has nothing good.
@@ -1435,7 +1325,10 @@ Guidance that has already been paid for once:
 
 # Benchmarking methodology
 
-Non-negotiable, because several early conclusions were artifacts:
+Non-negotiable, because several early conclusions were artifacts.
+`bench/run-measurements.sh` applies them to the measurements currently
+outstanding; a new measurement belongs in it, so the next sitting gets it right
+by default rather than by memory.
 
 - Medians and IQR over 31 samples, never best-of-N. GFLOP/s from median
   latency. **Pass `--iterationCount 31` explicitly** — nothing in the config

@@ -128,7 +128,9 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
     /// is O(n*t) against the O(n^2*t) of the product itself, and it keeps the
     /// result in the caller's panel without depending on the parity of p. The
     /// staging panel is allocated per call rather than kept, which is what
-    /// makes the operator stateless and therefore shareable.
+    /// makes the operator stateless and therefore shareable -- and on the
+    /// ordinary heap, since it dies with the call and the pinned heap, which
+    /// is never compacted, is for storage that lives.
     /// </summary>
     private void Repeat(ReadOnlyMatrixView<double> x, MatrixView<double> y, bool transposed)
     {
@@ -137,12 +139,14 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
 
         if (_power == 1) return;
 
-        var staging = new Matrix<double>(Order, x.Columns);
+        var shape = new MatrixShape(Order, x.Columns);
+        MatrixView<double> staging = MatrixView<double>.Bind(
+            Storage.Array<double>(shape.RequiredExtent, $"an {Order}x{x.Columns} staging panel"), shape);
 
         for (int step = 1; step < _power; step++)
         {
-            y.CopyTo(staging.View);
-            Product(staging.ReadOnlyView, y, transposed);
+            y.CopyTo(staging);
+            Product(staging, y, transposed);
         }
     }
 
@@ -211,7 +215,7 @@ internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
         string purpose = $"the split parts of an order-{a.Rows} complex operator";
         _real = Storage.Array<double>(_shape.RequiredExtent, purpose);
         _imaginary = Storage.Array<double>(_shape.RequiredExtent, purpose);
-        Split(a.ReadOnlyView, MatrixView<double>.Bind(_real, _shape), MatrixView<double>.Bind(_imaginary, _shape));
+        ComplexKernels.Split(a.ReadOnlyView, MatrixView<double>.Bind(_real, _shape), MatrixView<double>.Bind(_imaginary, _shape));
         _power = power;
     }
 
@@ -253,11 +257,11 @@ internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
         MatrixView<double> stacked = Panel(shape, purpose);
         MatrixView<double> p = Panel(shape, purpose), q = Panel(shape, purpose);
 
-        Split(x, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
+        ComplexKernels.Split(x, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
 
         for (int step = 0; step < _power; step++)
         {
-            if (step > 0) Split(y, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
+            if (step > 0) ComplexKernels.Split(y, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
 
             Product(ReadOnlyMatrixView<double>.Bind(_real, _shape), stacked, p, adjoint);        // Ar [Xr | Xi]
             Product(ReadOnlyMatrixView<double>.Bind(_imaginary, _shape), stacked, q, adjoint);   // Ai [Xr | Xi]
@@ -285,21 +289,6 @@ internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
     {
         if (transposed) KernelEntry.MultiplyPanelTransposed(a.ToOperand(), x.ToOperand(), y.ToTarget());
         else KernelEntry.MultiplyPanel(a.ToOperand(), x.ToOperand(), y.ToTarget());
-    }
-
-    private static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
-    {
-        for (int j = 0; j < source.Columns; j++)
-        {
-            ReadOnlySpan<Complex> column = source.Column(j);
-            Span<double> re = real.Column(j), im = imaginary.Column(j);
-
-            for (int i = 0; i < column.Length; i++)
-            {
-                re[i] = column[i].Real;
-                im[i] = column[i].Imaginary;
-            }
-        }
     }
 }
 

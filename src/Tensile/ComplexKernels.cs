@@ -179,8 +179,12 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
         return best;
     }
 
-    /// <summary>The real and imaginary parts of a complex view, written into two real views of its shape.</summary>
-    private static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
+    /// <summary>
+    /// The real and imaginary parts of a complex view, written into two real
+    /// views of its shape. The one place a complex operand is taken apart:
+    /// 4M here, and the complex dense operator's panel products.
+    /// </summary>
+    internal static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
     {
         for (int j = 0; j < source.Columns; j++)
         {

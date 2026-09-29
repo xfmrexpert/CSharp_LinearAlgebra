@@ -29,6 +29,7 @@ public static class Program
             typeof(ParallelCrossoverBenchmarks),
             typeof(BlockSizeBenchmarks),
             typeof(ComplexGemmBenchmarks),
+            typeof(ComplexExponentialBenchmarks),
         };
 
         if (GemmVsBlisBenchmarks.IsAvailable)

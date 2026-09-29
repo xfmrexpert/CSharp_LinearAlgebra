@@ -166,19 +166,159 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
 }
 
 /// <summary>
+/// A dense complex matrix raised to a power, as an operator: the complex
+/// counterpart of <see cref="DenseMatrixOperator"/>, for the complex norm
+/// estimate. Internal, because the public shape of a complex dense operator is
+/// a decision that the native complex exponential should make rather than
+/// this one.
+///
+/// Each product is two real panel products on the split parts, each over the
+/// stacked panel [Xr | Xi] of width 2t:
+///
+///     P = Ar [Xr | Xi],   Q = Ai [Xr | Xi]
+///     A X   = (P_r - Q_i) + i (P_i + Q_r)
+///     A^H X = (P_r + Q_i) + i (P_i - Q_r)      (with Ar^T and Ai^T in P, Q)
+///
+/// -- the 4M products, paired by the matrix they read. So each real part of A
+/// is streamed once per step, 2n^2 doubles against the 4n^2 of the real
+/// representation, and the conjugate transpose needs no kernel of its own.
+/// Unlike the real operator this one takes a snapshot: A is split once, at
+/// construction, because splitting it again for every product would cost
+/// O(n^2) against O(n^2 t) of work. Later writes to the matrix are therefore
+/// not seen.
+/// </summary>
+internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
+{
+    // The split parts, on the ordinary heap: an operator is built per
+    // estimate, and pinned storage, which is never compacted, is for storage
+    // that lives. The views are re-bound over these for each product.
+    private readonly double[] _real;
+    private readonly double[] _imaginary;
+    private readonly MatrixShape _shape;
+    private readonly int _power;
+
+    /// <exception cref="ArgumentException">The matrix is not square.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The power is less than 1.</exception>
+    public ComplexDenseOperator(Matrix<Complex> a, int power = 1)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentOutOfRangeException.ThrowIfLessThan(power, 1);
+
+        if (!a.IsSquare)
+            throw new ArgumentException($"A linear operator must be square, got {a.Rows}x{a.Columns}.", nameof(a));
+
+        _shape = new MatrixShape(a.Rows, a.Columns);
+        string purpose = $"the split parts of an order-{a.Rows} complex operator";
+        _real = Storage.Array<double>(_shape.RequiredExtent, purpose);
+        _imaginary = Storage.Array<double>(_shape.RequiredExtent, purpose);
+        Split(a.ReadOnlyView, MatrixView<double>.Bind(_real, _shape), MatrixView<double>.Bind(_imaginary, _shape));
+        _power = power;
+    }
+
+    /// <inheritdoc/>
+    public int Order => _shape.Rows;
+
+    /// <inheritdoc/>
+    public void Apply(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) => Repeat(x, y, adjoint: false);
+
+    /// <inheritdoc/>
+    public void ApplyAdjoint(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) => Repeat(x, y, adjoint: true);
+
+    /// <summary>(A^p)^H = (A^H)^p, so both directions are the same loop over one product.</summary>
+    private void Repeat(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y, bool adjoint)
+    {
+        if (x.Rows != Order)
+            throw new ArgumentException($"Panel has {x.Rows} rows, expected the operator's order {Order}.", nameof(x));
+
+        if (y.Rows != Order || y.Columns != x.Columns)
+            throw new ArgumentException($"Result panel is {y.Rows}x{y.Columns}, expected {Order}x{x.Columns}.", nameof(y));
+
+        if (Order == 0 || x.Columns == 0) return;
+
+        // Three n x 2t real panels per call, on the ordinary heap: the
+        // estimator applies an operator a handful of times, and the pinned
+        // heap, which is never compacted, is for storage that lives.
+        int t = x.Columns;
+
+        // The stacked panel is twice as wide as X, which can exceed what a
+        // buffer addresses even though X itself fits.
+        if ((long)Order * 2 * t > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(x), $"An {Order}x{t} panel's stacked real parts, {Order}x{2L * t}, would not fit a buffer.");
+        }
+
+        var shape = new MatrixShape(Order, 2 * t);
+        string purpose = $"an {Order}x{2 * t} split panel";
+        MatrixView<double> stacked = Panel(shape, purpose);
+        MatrixView<double> p = Panel(shape, purpose), q = Panel(shape, purpose);
+
+        Split(x, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
+
+        for (int step = 0; step < _power; step++)
+        {
+            if (step > 0) Split(y, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
+
+            Product(ReadOnlyMatrixView<double>.Bind(_real, _shape), stacked, p, adjoint);        // Ar [Xr | Xi]
+            Product(ReadOnlyMatrixView<double>.Bind(_imaginary, _shape), stacked, q, adjoint);   // Ai [Xr | Xi]
+
+            for (int j = 0; j < t; j++)
+            {
+                ReadOnlySpan<double> pr = p.Column(j), pi = p.Column(t + j);
+                ReadOnlySpan<double> qr = q.Column(j), qi = q.Column(t + j);
+                Span<Complex> target = y.Column(j);
+
+                for (int i = 0; i < target.Length; i++)
+                {
+                    target[i] = adjoint
+                        ? new Complex(pr[i] + qi[i], pi[i] - qr[i])
+                        : new Complex(pr[i] - qi[i], pi[i] + qr[i]);
+                }
+            }
+        }
+    }
+
+    private static MatrixView<double> Panel(MatrixShape shape, string purpose) =>
+        MatrixView<double>.Bind(Storage.Array<double>(shape.RequiredExtent, purpose), shape);
+
+    private static void Product(ReadOnlyMatrixView<double> a, ReadOnlyMatrixView<double> x, MatrixView<double> y, bool transposed)
+    {
+        if (transposed) KernelEntry.MultiplyPanelTransposed(a.ToOperand(), x.ToOperand(), y.ToTarget());
+        else KernelEntry.MultiplyPanel(a.ToOperand(), x.ToOperand(), y.ToTarget());
+    }
+
+    private static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
+    {
+        for (int j = 0; j < source.Columns; j++)
+        {
+            ReadOnlySpan<Complex> column = source.Column(j);
+            Span<double> re = real.Column(j), im = imaginary.Column(j);
+
+            for (int i = 0; i < column.Length; i++)
+            {
+                re[i] = column[i].Real;
+                im[i] = column[i].Imaginary;
+            }
+        }
+    }
+}
+
+/// <summary>
 /// The inverse of an LU-factored matrix, as an operator: applying it solves
 /// rather than multiplying. This is what turns the 1-norm estimator into a
 /// condition estimator, since cond_1(A) = ||A||_1 * ||A^-1||_1 and the second
-/// factor is exactly what the estimator can reach without forming A^-1.
+/// factor is exactly what the estimator can reach without forming A^-1. Its
+/// adjoint is (A^-1)^H = (A^H)^-1, which is the adjoint solve.
 /// </summary>
-public sealed class LuInverseOperator : IAdjointOperator<double>
+/// <typeparam name="T">The element type of the factorization.</typeparam>
+public sealed class LuInverseOperator<T> : IAdjointOperator<T> where T : unmanaged, INumberBase<T>
 {
-    private readonly LuDecomposition _lu;
+    private readonly LuDecomposition<T> _lu;
 
     /// <summary>Wrap a factorization so the estimator can probe A^-1.</summary>
     /// <param name="lu">A square factorization.</param>
     /// <exception cref="ArgumentException">The factorization is not square.</exception>
-    public LuInverseOperator(LuDecomposition lu)
+    public LuInverseOperator(LuDecomposition<T> lu)
     {
         ArgumentNullException.ThrowIfNull(lu);
 
@@ -193,7 +333,7 @@ public sealed class LuInverseOperator : IAdjointOperator<double>
 
     /// <inheritdoc/>
     /// <exception cref="InvalidOperationException">The factorization has an exactly zero pivot.</exception>
-    public void Apply(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    public void Apply(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         CopyInto(x, y);
         _lu.SolveInPlace(y);
@@ -201,14 +341,14 @@ public sealed class LuInverseOperator : IAdjointOperator<double>
 
     /// <inheritdoc/>
     /// <exception cref="InvalidOperationException">The factorization has an exactly zero pivot.</exception>
-    public void ApplyAdjoint(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    public void ApplyAdjoint(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         CopyInto(x, y);
-        _lu.SolveTransposedInPlace(y);
+        _lu.SolveAdjointInPlace(y);
     }
 
     /// <summary>The solves work in place, so the right-hand side has to arrive in Y.</summary>
-    private static void CopyInto(ReadOnlyMatrixView<double> x, MatrixView<double> y)
+    private static void CopyInto(ReadOnlyMatrixView<T> x, MatrixView<T> y)
     {
         if (y.Rows != x.Rows || y.Columns != x.Columns)
         {

@@ -131,7 +131,7 @@ say the rest is zero, and it cannot: LU packs `L` and `U` into one array, so the
 triangle a structure ignores routinely holds the other factor.
 
 ```csharp
-LuDecomposition lu = a.FactorLu();
+LuDecomposition<double> lu = a.FactorLu();
 
 lu.Lower.SolveInPlace(x.View);   // reads strictly below the diagonal
 lu.Upper.SolveInPlace(x.View);   // reads the diagonal and above
@@ -154,15 +154,29 @@ The safest structured matrices are the ones you never assert: `lu.Lower` and
 ## Factorizations
 
 ```csharp
-LuDecomposition lu = a.FactorLu();     // a is not modified
+LuDecomposition<double> lu = a.FactorLu();     // a is not modified
 
 Matrix<double> x  = lu.Solve(b);
-Matrix<double> xt = lu.SolveTransposed(b);
+Matrix<double> xa = lu.SolveAdjoint(b);         // Aᴴ x = b; Aᵀ for a real matrix
 
-bool broken   = lu.IsSingular;          // an exactly zero pivot
+bool broken   = lu.IsSingular;                  // an exactly zero pivot
 double rcond  = lu.ReciprocalCondition();
 double det    = lu.Determinant();
 ```
+
+`LuDecomposition<T>` is one type for every element type the library factors —
+`double` and `Complex` (see [Complex matrices](#complex-matrices)). It has no
+public constructor; it comes only from `FactorLu`, which exists only for element
+types with arithmetic. `ReciprocalCondition` is an extension on the closed
+types that have a norm estimator — `LuDecomposition<double>` and
+`LuDecomposition<Complex>` — so on any other element type it would be a compile
+error rather than a run-time one.
+
+The adjoint solve replaced `SolveTransposed` when the type became generic. For a
+real factorization they are the same solve; for a complex one the transpose is
+rarely what is wanted and the conjugate transpose is what an adjoint operator
+and the norm estimator need. (The triangular structure solves below are still
+real-only and still say `SolveTransposed`.)
 
 `FactorLu` copies, so your matrix survives, and the result keeps its own
 storage alive for as long as you hold it. When the copy matters —
@@ -170,7 +184,7 @@ it is O(n²) against an O(n³) factorization, so it rarely does — factor in
 place through a workspace:
 
 ```csharp
-LuDecomposition lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
+LuDecomposition<double> lu = Workspace.Shared.FactorLu(a);   // a is overwritten with the packed factors
 ```
 
 The decomposition then shares `a`'s storage, which is why this takes a
@@ -218,6 +232,16 @@ small value reliably means ill-conditioning while a large one is weaker evidence
 of good conditioning. Unlike `dgecon` it needs no norm argument — the norm of
 the original was captured before the factorization overwrote it, so it cannot be
 given the wrong one.
+
+All of this works on `Matrix<Complex>` too, where ‖A‖₁ is the largest column sum
+of moduli: `OneNorm`, `InfinityNorm`, `EstimateOneNorm(power)`, and
+`ReciprocalCondition` on a complex factorization (the `zgecon` equivalent). The
+complex estimator is the same algorithm with the adjoint Aᴴ for Aᵀ, the
+direction z/|z| for the sign ±1, and no resampling of parallel sign columns —
+complex signs essentially never repeat. Measured by `tensile-diag` on the complex
+counterparts of the real ensembles, it is exact about as often as the real one
+(27% and 41% on uniform matrices at t = 2 and 4, 60% and 75% with dominant
+columns), and its worst ratio was 0.79.
 
 ---
 
@@ -282,18 +306,20 @@ same, which is why this was once called `ApplyTranspose`. For a complex one the
 transpose is the wrong operation, and supplying it would give an estimator that
 is quietly wrong rather than one that fails.
 
-Two implementations ship, both `IAdjointOperator<double>`. `DenseMatrixOperator(a, power)`
-applies `Aᵖ` by `p` successive panel products without forming the power;
-`LuInverseOperator(lu)` applies `A⁻¹` by solving. Both are what `NormEstimate`
+Two implementations ship. `DenseMatrixOperator(a, power)`, an
+`IAdjointOperator<double>`, applies `Aᵖ` by `p` successive panel products
+without forming the power; `LuInverseOperator<T>(lu)` applies `A⁻¹` by solving,
+and its adjoint by the adjoint solve, for either element type. Both are what `NormEstimate`
 needs:
 
 ```csharp
 double est   = NormEstimate.Of(new DenseMatrixOperator(a, power: 3)).Value;   // ≈ ‖A³‖₁
-double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator
+double rcond = lu.ReciprocalCondition();                                        // via LuInverseOperator<double>
 ```
 
 `NormEstimate.Of` is Higham and Tisseur's block 1-norm estimator, the algorithm
-behind MATLAB's `normest1`. The result is always a **lower bound**, exact on
+behind MATLAB's `normest1`, with overloads for `IAdjointOperator<double>` and
+`IAdjointOperator<Complex>`. The result is always a **lower bound**, exact on
 most matrices and rarely off by more than a factor of two, and deterministic
 for a given seed. It never sees the operator's entries — only the products — so
 an operator that has no entries works as well as one that does.
@@ -495,6 +521,35 @@ than the embedded route. Those are noisy figures from a short job; the
 verification-machine measurement is outstanding. `ComplexGemmBenchmarks` is the
 instrument.
 
+### LU and solves
+
+Complex matrices factor and solve with the same calls as real ones:
+
+```csharp
+LuDecomposition<Complex> lu = z.FactorLu();   // z is not modified
+Matrix<Complex> x = lu.Solve(b);              // Z x = b
+Matrix<Complex> y = lu.SolveAdjoint(b);       // Zᴴ y = b, the conjugate transpose
+Complex det = lu.Determinant();
+
+Matrix<Complex> x2 = z.Solve(b);              // factor and discard
+```
+
+Partial pivoting picks the entry with the largest |Re| + |Im|, not the largest
+modulus. That is LAPACK's `izamax` rule, so a pivot sequence can be compared
+with one from `zgetrf`; it is within √2 of the modulus, so it carries the same
+stability, and it needs no square root.
+
+The algorithm is the real one, blocked the same way, written once over the
+element type. Its trailing updates — nearly all of the work — are 4M products on
+the workspace's real GEMM. The panels and triangular solves are safe managed
+code, slower per flop than the real kernel's but O(n²·nb) of the total.
+
+`lu.ReciprocalCondition()` works on a complex factorization as it does on a
+real one (see [Norms and conditioning](#norms-and-conditioning)). What it does
+not have yet is a **measured block size**: the default is the real
+factorization's, which was measured for real; whether complex wants a different
+one is open.
+
 ### Exponentials
 
 `Expm` and `Expmv` accept `Matrix<Complex>` with the same call shape as the
@@ -509,50 +564,43 @@ In the standard multiconductor-line formulation this is the chain-parameter
 matrix Φ(ℓ) = exp(Mℓ), with M = [[0, −Z(ω)], [−Y(ω), 0]] complex at each
 frequency, so a frequency sweep is one of these per frequency.
 
-**How they are computed today.** There is no complex LU or norm estimator
-yet, so these run the real algorithms on the real representation of the
-complex matrix: X + iY becomes
-the 2n×2n matrix [[X, −Y], [Y, X]], which the exponential commutes with. The
-answer is the real algorithm's, verified against an independent complex Taylor
-series and against invariants such as exp(iH) being unitary for Hermitian H.
-The public signatures will not change when native complex primitives replace
-this.
+**How they are computed.** Natively: the same algorithms as the real
+overloads — Al-Mohy and Higham's scaling and squaring for `Expm`, their
+truncated Taylor action for `Expmv` — written once over the element type and
+run in complex arithmetic. Products are 4M complex products on the workspace's
+GEMM, the Padé denominator is factored by the complex LU, and the
+‖Aᵏ‖^(1/k) estimates come from the complex norm estimator. For `double` the
+same code performs exactly the operations the real-only implementation did.
 
-What the route costs, compared with a native implementation that does not
-exist yet:
+They were first computed through the real representation of the complex
+matrix — X + iY as the 2n×2n real [[X, −Y], [Y, X]], which the exponential
+commutes with — and that route is kept, internally, as the oracle the native
+one is tested against. Against it, the native route does half the flops for
+`Expm`, needs half the memory, and chooses its scaling from the complex norms
+rather than from real ones up to √2 larger; on random complex matrices
+`tensile-diag` shows it never taking more squarings, and sometimes one fewer.
+On a development container (noisy; within-run ratios) native `Expm` measured
+1.26× faster than the embedded route at n=64 and 1.49× at n=256, and native
+`Expmv` level at n=64 and 1.47× faster at n=256. Not yet measured on the
+verification machine; `ComplexExponentialBenchmarks` is the instrument.
 
-| | `Expm` | `Expmv` |
-| --- | --- | --- |
-| Flops | 2× — each product computes every block twice | 1× — the stacked panel is not redundant |
-| Memory | 2× | 2× for the matrix |
-| Parameter choice | at most one extra squaring | scaling up to √2 larger |
-
-The last row is because the embedded 1-norm is between 1 and √2 times the
-complex one. Random complex matrices sit near √2 (1.28–1.39 measured); real
-ones sit at exactly 1, and a real matrix passed as complex takes exactly the
-real path, parameters included. `Expmv` is memory-bound, so expect its time
-nearer twice a native version's than level with it despite equal flops —
-unmeasured.
-
-`Expmv` removes the **imaginary** part of the trace shift itself before
-embedding, because the real representation cannot: its trace is only
-2·Re(trace A). The shift comes back as a unit-modulus factor e^(itω), which
-cannot overflow. This matters for any operator carrying a large imaginary
-diagonal — a jωI term — where leaving it in cost up to 24× the work in
-measurement. (The MTL chain matrix has zero trace, so it is unaffected either
-way.)
+`Expmv` removes the whole trace shift μ = trace(A)/n, real and imaginary parts
+together, and restores it one factor exp(tμ/s) per scaling step. The imaginary
+part is the one that matters for an operator carrying a large jωI term; the
+embedded route could only remove it by special handling, and without that it
+cost up to 24× the work in measurement. (The MTL chain matrix has zero trace,
+so it is unaffected either way.)
 
 A matrix-free complex operator — an `ILinearOperator<Complex>` — has its own
-overload, which applies the operator through its real representation without
-ever forming it:
+overload:
 
 ```csharp
 var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
 ```
 
 As with the real matrix-free overload, the scaling comes from the bound you
-supply (scaled internally by √2 for the real representation). There is no
-trace to shift by either, so an operator carrying a large jωI term keeps it.
+supply, an upper bound on the largest column sum of moduli. There is no trace
+to shift by either, so an operator carrying a large jωI term keeps it.
 If you know that shift, remove it yourself: exp(tA)B = e^(iωt)·exp(t(A − iωI))B,
 exactly, and apply the operator without it.
 
@@ -560,12 +608,12 @@ exactly, and apply the operator without it.
 
 ## Not here yet
 
-- **Complex LU, solves and norm estimation.** Complex products are native;
-  the exponentials above still reach complex matrices through a real
-  representation until these exist.
+- **A public complex dense operator.** `EstimateOneNorm` on a complex matrix
+  uses an internal one; `DenseMatrixOperator` is real-only.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
-- **Arithmetic for any type but `double`.** Storage is generic; operations are
-  not. Adding a type is additive and breaks no signature here.
+- **Arithmetic for any type but `double` and `Complex`.** Storage is generic;
+  operations exist for those two. LU is written once over the element type, so
+  a third type needs its element kernels, not a new factorization.
 - **In-place transpose**, and a transposed GEMM. The primitive layer has no
   transpose flags at all, by design.

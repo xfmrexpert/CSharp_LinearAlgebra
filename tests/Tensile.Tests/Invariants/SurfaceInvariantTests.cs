@@ -245,8 +245,8 @@ public class SurfaceInvariantTests
     public void FactorizationIsNotDisposable()
     {
         Assert.False(
-            typeof(IDisposable).IsAssignableFrom(typeof(LuDecomposition)),
-            "[I6] LuDecomposition implements IDisposable (closed by Phase 2, when it owns a Matrix<double> on the POH).");
+            typeof(IDisposable).IsAssignableFrom(typeof(LuDecomposition<>)),
+            "[I6] LuDecomposition<T> implements IDisposable (closed by Phase 2, when it owns a Matrix<double> on the POH).");
     }
 
     private static IEnumerable<Type> TypesInvolvedIn(MemberInfo member)

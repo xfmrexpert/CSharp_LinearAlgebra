@@ -73,7 +73,7 @@ public static partial class MatrixOperations
     /// <param name="a">The matrix to factor. Not modified.</param>
     /// <param name="blockSize">Panel width; zero selects the default. The optimum shifts with size.</param>
     /// <param name="workspace">Buffers and kernel choice; null uses <see cref="Workspace.Shared"/>.</param>
-    public static LuDecomposition FactorLu(
+    public static LuDecomposition<double> FactorLu(
         this Matrix<double> a, int blockSize = 0, Workspace? workspace = null)
     {
         ArgumentNullException.ThrowIfNull(a);
@@ -84,11 +84,41 @@ public static partial class MatrixOperations
     }
 
     /// <summary>
+    /// Estimate 1/cond_1(A), the equivalent of LAPACK's <c>dgecon</c>. Returns
+    /// zero for an exactly singular factorization.
+    ///
+    /// The norm of the original matrix was captured before it was overwritten,
+    /// so unlike <c>dgecon</c> this needs no argument and cannot be handed the
+    /// wrong one.
+    ///
+    /// The estimator underestimates the norm of the inverse, so the result is
+    /// an OVER-estimate of the reciprocal condition number: a small value
+    /// reliably means ill-conditioning, a large one is weaker evidence of good
+    /// conditioning.
+    ///
+    /// An extension on the closed type, beside the complex one, because it
+    /// needs a norm estimator for the element type: on a decomposition of any
+    /// other type, asking for it is a compile error rather than a run-time one.
+    /// </summary>
+    /// <param name="lu">The factorization.</param>
+    /// <param name="columns">Probe columns for the estimator; more costs more products.</param>
+    /// <exception cref="InvalidOperationException">The factorization is not square.</exception>
+    public static double ReciprocalCondition(this LuDecomposition<double> lu, int columns = NormEstimate.DefaultColumns)
+    {
+        ArgumentNullException.ThrowIfNull(lu);
+
+        if (!lu.IsSquare)
+            throw new InvalidOperationException("Condition estimation requires a square factorization.");
+
+        return Condition.ReciprocalOne(lu.OneNormOfA, lu, columns);
+    }
+
+    /// <summary>
     /// Solve A*X = B for a general square A, by LU with partial pivoting.
     ///
     /// Factoring and discarding, so solving against several right-hand sides in
     /// separate calls does the O(n^3) work each time. Call
-    /// <see cref="FactorLu"/> once and reuse it instead, or pass all the
+    /// <see cref="FactorLu(Matrix{double}, int, Workspace?)"/> once and reuse it instead, or pass all the
     /// right-hand sides as columns of <paramref name="b"/>.
     /// </summary>
     /// <param name="a">Coefficient matrix, square. Not modified.</param>

@@ -186,8 +186,8 @@ public sealed partial class Workspace : IDisposable
     /// decomposition shares its storage, so <paramref name="a"/> must not be
     /// written afterwards while the decomposition is in use.
     ///
-    /// This is the zero-copy path; <see cref="MatrixOperations.FactorLu"/> is
-    /// the copying one and the right default. Taking a <see cref="Matrix{T}"/>
+    /// This is the zero-copy path; <see cref="MatrixOperations.FactorLu(Matrix{double}, int, Workspace?)"/>
+    /// is the copying one and the right default. Taking a <see cref="Matrix{T}"/>
     /// rather than a view is deliberate: the decomposition has to keep the
     /// factors alive for as long as it exists, and a borrowed view cannot
     /// promise that, but a matrix -- a garbage-collected object -- can.
@@ -195,7 +195,7 @@ public sealed partial class Workspace : IDisposable
     /// <param name="a">The square or rectangular matrix to factor. Overwritten.</param>
     /// <param name="blockSize">Panel width; zero selects the default. The optimum shifts with size.</param>
     /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
-    public LuDecomposition FactorLu(Matrix<double> a, int blockSize = 0) =>
+    public LuDecomposition<double> FactorLu(Matrix<double> a, int blockSize = 0) =>
         FactorLu(a, blockSize, timings: null);
 
     /// <summary>
@@ -205,7 +205,7 @@ public sealed partial class Workspace : IDisposable
     /// not part of the library's contract, and a null collector is exactly the
     /// shipped path.
     /// </summary>
-    internal LuDecomposition FactorLu(Matrix<double> a, int blockSize, LuPhaseTimings? timings)
+    internal LuDecomposition<double> FactorLu(Matrix<double> a, int blockSize, LuPhaseTimings? timings)
     {
         ArgumentNullException.ThrowIfNull(a);
 
@@ -229,7 +229,21 @@ public sealed partial class Workspace : IDisposable
             };
         }
 
-        return new LuDecomposition(a, factorization, oneNorm);
+        return new LuDecomposition<double>(a, factorization, oneNorm, KernelLuSolver.Instance);
+    }
+
+    /// <summary>
+    /// Throw if the workspace has been disposed. For an operation that would
+    /// otherwise discover it only part-way through -- after it has started
+    /// writing the caller's matrix.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The workspace has been disposed.</exception>
+    internal void ThrowIfDisposed()
+    {
+        lock (_gate)
+        {
+            _ = Active;
+        }
     }
 
     private GemmDispatch Active

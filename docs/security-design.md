@@ -323,7 +323,7 @@ packing layout, asserted under `Debug` (§8, "debug assertions").
 
 | Assembly | `AllowUnsafeBlocks` | Visibility | Contents |
 |---|---|---|---|
-| `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition`, `Workspace`, operations, `ILinearOperator<T>`, the `normest1` driver |
+| `Tensile` | **false**, and `CheckForOverflowUnderflow` **true** | public API | `Matrix`, `MatrixShape`, views, structures, `LuDecomposition<T>`, `Workspace`, operations, `ILinearOperator<T>`, the `normest1` driver |
 | `Tensile.Kernels` | true | **all `internal`**; `InternalsVisibleTo` → `Tensile`, tests, bench, diagnostics | micro-kernels, packing, GEMM drivers, LU, triangular solves, ColumnOps/Pivoting/PanelProduct, exact norms, `KernelEntry` |
 | `Tensile.Interop.Blis` | true | public, **separate package** | the BLIS binding |
 

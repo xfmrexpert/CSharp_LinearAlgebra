@@ -470,6 +470,29 @@ public class ComplexMultiplyTests
         // An empty operand has zero norm, however many columns it nominally has.
         Assert.Equal(0.0, TKernels.OneNorm(new Matrix<T>(0, 1000).ReadOnlyView));
         Assert.Equal(0.0, TKernels.InfinityNorm(new Matrix<T>(1000, 0).ReadOnlyView));
+
+        for (int trial = 0; trial < 64; trial++)
+        {
+            T x = sample(rng);
+
+            // The pivot measure is within sqrt(2) of the modulus, from above:
+            // the bound partial pivoting's stability argument needs.
+            double measure = TKernels.PivotMagnitude(x), modulus = TKernels.Magnitude(x);
+            Assert.True(
+                measure >= modulus * (1 - (4 * U)) && measure <= Math.Sqrt(2.0) * modulus * (1 + (4 * U)),
+                $"{typeof(T).Name}: pivot measure {measure} against modulus {modulus}");
+
+            // Conjugation is an involution that preserves the modulus, and
+            // x * conj(x) = |x|^2 is real.
+            T conjugate = TKernels.Conjugate(x);
+            Assert.Equal(x, TKernels.Conjugate(conjugate));
+            Assert.Equal(modulus, TKernels.Magnitude(conjugate));
+            Assert.Equal(modulus * modulus, TKernels.Magnitude(x * conjugate), 14);
+            Assert.Equal(TKernels.Magnitude(x * conjugate), TKernels.PivotMagnitude(x * conjugate), 14);
+        }
+
+        Assert.Equal(0.0, TKernels.PivotMagnitude(T.Zero));
+        Assert.Equal(1.0, TKernels.PivotMagnitude(T.One));
     }
 
     // ---- helpers ---------------------------------------------------------------

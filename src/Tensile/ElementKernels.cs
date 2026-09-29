@@ -29,11 +29,14 @@ namespace Tensile;
 ///
 /// Members arrive as the algorithms that need them do, each with an
 /// implementation for every element type at once, so the interface is shaped
-/// by more than one case rather than guessed from one. LU and the norm
-/// estimator's products join it with complex LU and complex <c>normest1</c>.
-/// Note that pivoting will bring its own measure: LAPACK's <c>izamax</c>
-/// pivots on |Re| + |Im|, not on <see cref="Magnitude"/>, and matching it is
-/// what keeps pivot sequences comparable with <c>zgetrf</c>.
+/// by more than one case rather than guessed from one. LU brought
+/// <see cref="PivotMagnitude"/> and <see cref="Conjugate"/>; the norm
+/// estimator brought <see cref="Sign"/> and <see cref="SignsAreDiscrete"/>;
+/// the exponentials brought <see cref="Scale"/>, <see cref="Exp"/>, and the
+/// two members that are not arithmetic at all, <see cref="PowerOperator"/> and
+/// <see cref="FactorLuInPlace"/> -- the element type's own operator and
+/// factorization, which an algorithm written over <c>T</c> has no other way to
+/// reach without testing what <c>T</c> is.
 ///
 /// Internal: the public surface stays concrete, with overloads only for the
 /// element types that implement this, so an element type with no arithmetic
@@ -54,6 +57,58 @@ internal interface IElementKernels<T> where T : unmanaged, INumberBase<T>
 
     /// <summary>|x|, the modulus, as a real number.</summary>
     static abstract double Magnitude(T value);
+
+    /// <summary>
+    /// The measure partial pivoting maximises. For a real number it is |x|.
+    /// For a complex one it is |Re| + |Im|, not the modulus: that is what
+    /// LAPACK's <c>izamax</c> uses (its <c>cabs1</c>), and matching it keeps a
+    /// pivot sequence comparable with <c>zgetrf</c>'s. It is within a factor
+    /// of sqrt(2) of the modulus, so the growth bound of partial pivoting
+    /// survives, and it needs no square root.
+    /// </summary>
+    static abstract double PivotMagnitude(T value);
+
+    /// <summary>The complex conjugate; the identity for a real type. What turns a transpose into an adjoint.</summary>
+    static abstract T Conjugate(T value);
+
+    /// <summary>
+    /// The direction of <paramref name="value"/>, of unit modulus, with the
+    /// direction of zero taken as 1: +/-1 for a real number, z/|z| for a
+    /// complex one. The norm estimator's sign matrix is made of these.
+    /// </summary>
+    static abstract T Sign(T value);
+
+    /// <summary>
+    /// Whether <see cref="Sign"/> takes values in a finite set (+/-1), so that
+    /// two sign vectors can be exactly parallel and the norm estimator's
+    /// resampling of repeated columns means something. True for a real type.
+    /// </summary>
+    static abstract bool SignsAreDiscrete { get; }
+
+    /// <summary>
+    /// <paramref name="value"/> times a real <paramref name="factor"/>. For a
+    /// complex value, each part is scaled on its own: a complex product with
+    /// (factor + 0i) would compute the same thing with extra roundings that
+    /// happen to be exact, and a NaN from 0 * infinity in the one case where
+    /// they are not.
+    /// </summary>
+    static abstract T Scale(T value, double factor);
+
+    /// <summary>The scalar exponential.</summary>
+    static abstract T Exp(T value);
+
+    /// <summary>
+    /// A dense matrix raised to a power, as an operator with an adjoint: what
+    /// the norm estimator is pointed at to reach ||A^p||_1 without forming A^p.
+    /// </summary>
+    static abstract IAdjointOperator<T> PowerOperator(Matrix<T> a, int power);
+
+    /// <summary>
+    /// Factor <paramref name="a"/> in place on <paramref name="workspace"/>,
+    /// through the element type's own LU: the kernel factorization for a real
+    /// type, the generic blocked one for complex.
+    /// </summary>
+    static abstract LuDecomposition<T> FactorLuInPlace(Workspace workspace, Matrix<T> a);
 
     /// <summary>||A||_1, the largest column sum of magnitudes. Exact, O(m*n).</summary>
     static abstract double OneNorm(ReadOnlyMatrixView<T> a);
@@ -81,6 +136,31 @@ internal readonly struct DoubleKernels : IElementKernels<double>
 
     /// <inheritdoc/>
     public static double Magnitude(double value) => Math.Abs(value);
+
+    /// <inheritdoc/>
+    public static double PivotMagnitude(double value) => Math.Abs(value);
+
+    /// <inheritdoc/>
+    public static double Conjugate(double value) => value;
+
+    /// <inheritdoc/>
+    /// <remarks>Anything not at least zero, NaN included, is taken as negative -- the rule the real estimator always had.</remarks>
+    public static double Sign(double value) => value >= 0.0 ? 1.0 : -1.0;
+
+    /// <inheritdoc/>
+    public static bool SignsAreDiscrete => true;
+
+    /// <inheritdoc/>
+    public static double Scale(double value, double factor) => value * factor;
+
+    /// <inheritdoc/>
+    public static double Exp(double value) => Math.Exp(value);
+
+    /// <inheritdoc/>
+    public static IAdjointOperator<double> PowerOperator(Matrix<double> a, int power) => new DenseMatrixOperator(a, power);
+
+    /// <inheritdoc/>
+    public static LuDecomposition<double> FactorLuInPlace(Workspace workspace, Matrix<double> a) => workspace.FactorLu(a);
 
     /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<double> a) => a.OneNorm();

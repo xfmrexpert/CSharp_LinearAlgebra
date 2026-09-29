@@ -18,7 +18,7 @@ var b = Matrix.FromColumnMajor<double>(2, 1, [1.0, 2.0]);
 
 Matrix<double> x = a.Solve(b);
 
-LuDecomposition lu = a.FactorLu();
+LuDecomposition<double> lu = a.FactorLu();
 double rcond = lu.ReciprocalCondition();
 ```
 

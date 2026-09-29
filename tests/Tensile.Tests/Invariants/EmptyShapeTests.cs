@@ -44,7 +44,7 @@ public class EmptyShapeTests
         Assert.Throws<ArgumentOutOfRangeException>(() => tall.Multiply(wide));
 
         // A factorization of nothing, and solves against empty right-hand sides.
-        LuDecomposition lu = wide.FactorLu();
+        LuDecomposition<double> lu = wide.FactorLu();
         Assert.Equal(0, lu.Pivots.Length);
         _ = Matrix.Identity<double>(4).FactorLu().Solve(new Matrix<double>(4, 0));
         Matrix.Identity<double>(4).As<UpperTriangular>().SolveInPlace(new Matrix<double>(4, 0).View);

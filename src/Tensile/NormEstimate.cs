@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Tensile;
 
 /// <summary>Outcome of a 1-norm estimate.</summary>
@@ -14,7 +16,7 @@ public readonly record struct NormEstimateResult(double Value, int Iterations, i
 ///
 /// The estimate is obtained from a few products with A and A^T rather than from
 /// A's entries, which is what makes it useful twice over: with
-/// <see cref="LuInverseOperator"/> it gives a dgecon-equivalent condition
+/// <see cref="LuInverseOperator{T}"/> it gives a dgecon-equivalent condition
 /// estimate without forming A^-1, and with <see cref="DenseMatrixOperator"/>
 /// raised to a power it gives the ||A^k||^(1/k) quantities that Al-Mohy and
 /// Higham's scaling-and-squaring uses to choose its scaling parameter.
@@ -29,6 +31,14 @@ public readonly record struct NormEstimateResult(double Value, int Iterations, i
 /// - It is deterministic for a given seed. The algorithm needs random +/-1
 ///   starting vectors, but a fixed default seed means repeated runs on the same
 ///   matrix agree, which is what makes it usable in a regression test.
+///
+/// The complex estimator is the same algorithm with three substitutions, as in
+/// Higham and Tisseur's complex variant and MATLAB's normest1: the adjoint
+/// A^H where the real one uses A^T; sign(y) = y/|y| (and 1 at zero), a
+/// unit-modulus direction rather than +/-1; and no test for parallel sign
+/// columns, which is meaningful only when the signs are a discrete set -- a
+/// complex sign vector almost never repeats exactly, and resampling one would
+/// buy nothing. The starting probes are the real +/-1 ones in both cases.
 ///
 /// The algorithm is bookkeeping around the operator's products -- sign
 /// matrices, column norms, a sort -- and every buffer it needs is O(n*t), so it
@@ -61,7 +71,43 @@ public static class NormEstimate
         IAdjointOperator<double> op,
         int columns = DefaultColumns,
         int maxIterations = DefaultMaxIterations,
+        int seed = DefaultSeed) =>
+        Estimate<double, DoubleKernels>(op, columns, maxIterations, seed);
+
+    /// <summary>
+    /// Estimate ||A||_1 for an arbitrary square complex operator, where
+    /// ||A||_1 is the largest column sum of moduli. The operator's adjoint is
+    /// the conjugate transpose.
+    /// </summary>
+    /// <param name="op">The operator to probe.</param>
+    /// <param name="columns">Probe columns; clamped to [1, n]. More costs more products and estimates better.</param>
+    /// <param name="maxIterations">Iteration cap; at least 2 is used.</param>
+    /// <param name="seed">Seed for the random starting probes.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The operator's order is negative, or the n x t probe panel would not fit a buffer.</exception>
+    /// <exception cref="AllocationLimitException">A probe panel would exceed <see cref="TensileLimits.MaxElements"/>.</exception>
+    public static NormEstimateResult Of(
+        IAdjointOperator<Complex> op,
+        int columns = DefaultColumns,
+        int maxIterations = DefaultMaxIterations,
+        int seed = DefaultSeed) =>
+        Estimate<Complex, ComplexKernels>(op, columns, maxIterations, seed);
+
+    /// <summary>
+    /// The algorithm, once over the element type, for the generic algorithms
+    /// that need an estimate without knowing <c>T</c>. Whether sign vectors are
+    /// +/-1 -- which is what makes the tests for parallel columns meaningful --
+    /// comes from <c>TKernels.SignsAreDiscrete</c>. For <see cref="double"/>
+    /// this performs the same operations, in the same order and with the same
+    /// random draws, as the real-only estimator it replaced, so real estimates
+    /// did not move.
+    /// </summary>
+    internal static NormEstimateResult Estimate<T, TKernels>(
+        IAdjointOperator<T> op,
+        int columns = DefaultColumns,
+        int maxIterations = DefaultMaxIterations,
         int seed = DefaultSeed)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
     {
         ArgumentNullException.ThrowIfNull(op);
 
@@ -104,11 +150,11 @@ public static class NormEstimate
         string panelPurpose = $"an {n}x{t} probe panel";
         string vectorPurpose = $"an order-{n} work vector";
 
-        double[] x = Storage.Array<double>(extent, panelPurpose);
-        double[] y = Storage.Array<double>(extent, panelPurpose);
-        double[] s = Storage.Array<double>(extent, panelPurpose);
-        double[] sOld = Storage.Array<double>(extent, panelPurpose);
-        double[] z = Storage.Array<double>(extent, panelPurpose);
+        T[] x = Storage.Array<T>(extent, panelPurpose);
+        T[] y = Storage.Array<T>(extent, panelPurpose);
+        T[] s = Storage.Array<T>(extent, panelPurpose);
+        T[] sOld = Storage.Array<T>(extent, panelPurpose);
+        T[] z = Storage.Array<T>(extent, panelPurpose);
         double[] h = Storage.Array<double>(n, vectorPurpose);
 
         // Not a security use of randomness (CA5394 is off for this assembly,
@@ -133,15 +179,15 @@ public static class NormEstimate
         {
             iterations = k;
 
-            op.Apply(ReadOnlyMatrixView<double>.Bind(x, panel), MatrixView<double>.Bind(y, panel));
+            op.Apply(ReadOnlyMatrixView<T>.Bind(x, panel), MatrixView<T>.Bind(y, panel));
             products += t;
 
             int argmax = 0;
-            est = ColumnOneNorm(y, 0, n);
+            est = ColumnOneNorm<T, TKernels>(y, 0, n);
 
             for (int j = 1; j < t; j++)
             {
-                double value = ColumnOneNorm(y, j * n, n);
+                double value = ColumnOneNorm<T, TKernels>(y, j * n, n);
                 if (value > est) { est = value; argmax = j; }
             }
 
@@ -164,25 +210,26 @@ public static class NormEstimate
             // just does not get to choose a new probe.
             if (k > itmax) break;
 
-            // S := sign(Y), taking sign(0) as +1. The previous S is kept to
-            // detect a repeat, which is the other termination test.
+            // S := sign(Y), taking sign(0) as 1. The previous S is kept to
+            // detect a repeat, which is the other termination test -- for real
+            // signs only, since only a discrete set of signs can repeat.
             (s, sOld) = (sOld, s);
-            for (int i = 0; i < extent; i++) s[i] = y[i] >= 0.0 ? 1.0 : -1.0;
+            for (int i = 0; i < extent; i++) s[i] = TKernels.Sign(y[i]);
 
-            if (t > 1)
+            if (TKernels.SignsAreDiscrete && t > 1)
             {
                 if (AllColumnsParallel(n, t, s, sOld)) break;
                 MakeColumnsDistinct(rng, n, t, s, sOld);
             }
 
-            op.ApplyAdjoint(ReadOnlyMatrixView<double>.Bind(s, panel), MatrixView<double>.Bind(z, panel));
+            op.ApplyAdjoint(ReadOnlyMatrixView<T>.Bind(s, panel), MatrixView<T>.Bind(z, panel));
             products += t;
 
             for (int i = 0; i < n; i++)
             {
                 double best = 0.0;
                 for (int j = 0; j < t; j++)
-                    best = Math.Max(best, Math.Abs(z[j * n + i]));
+                    best = Math.Max(best, TKernels.Magnitude(z[j * n + i]));
                 h[i] = best;
             }
 
@@ -219,7 +266,7 @@ public static class NormEstimate
                 int index = order[j];
                 current[j] = index;
                 used[index] = true;
-                x[j * n + index] = 1.0;
+                x[j * n + index] = T.One;
             }
         }
 
@@ -228,11 +275,13 @@ public static class NormEstimate
 
     /// <summary>
     /// Starting probe: one column of ones, the rest random +/-1 and distinct
-    /// from their predecessors, all scaled to unit 1-norm.
+    /// from their predecessors, all scaled to unit 1-norm. Real in both the
+    /// real and the complex estimator.
     /// </summary>
-    private static void InitialProbe(Random rng, int n, int t, double[] x)
+    private static void InitialProbe<T>(Random rng, int n, int t, T[] x)
+        where T : unmanaged, INumberBase<T>
     {
-        for (int i = 0; i < n; i++) x[i] = 1.0;
+        for (int i = 0; i < n; i++) x[i] = T.One;
 
         for (int j = 1; j < t; j++)
         {
@@ -243,41 +292,55 @@ public static class NormEstimate
             }
         }
 
-        for (int i = 0; i < n * t; i++) x[i] /= n;
+        // +/-1 times the rounded 1/n is exactly the rounded +/-1/n, so this is
+        // the same panel as dividing each entry by n.
+        T scale = T.CreateTruncating(1.0 / n);
+        for (int i = 0; i < n * t; i++) x[i] *= scale;
     }
 
-    private static void FillRandomSigns(Random rng, double[] panel, int start, int n)
+    private static void FillRandomSigns<T>(Random rng, T[] panel, int start, int n)
+        where T : unmanaged, INumberBase<T>
     {
-        for (int i = 0; i < n; i++) panel[start + i] = rng.Next(2) == 0 ? -1.0 : 1.0;
+        for (int i = 0; i < n; i++) panel[start + i] = rng.Next(2) == 0 ? -T.One : T.One;
     }
 
     /// <summary>
-    /// Two +/-1 vectors are parallel exactly when |u.v| = n. The entries are
-    /// integers well inside the exactly representable range, so this comparison
-    /// is safe.
+    /// Two +/-1 vectors are parallel exactly when one is the other or its
+    /// negation, entry by entry. Exact comparisons on exact values; the same
+    /// verdict as |u.v| = n, without the arithmetic.
     /// </summary>
-    private static bool IsParallel(int n, ReadOnlySpan<double> u, ReadOnlySpan<double> v)
+    private static bool IsParallel<T>(ReadOnlySpan<T> u, ReadOnlySpan<T> v)
+        where T : unmanaged, INumberBase<T>
     {
-        double dot = 0.0;
-        for (int i = 0; i < n; i++) dot += u[i] * v[i];
-        return Math.Abs(dot) == n;
+        bool same = true, opposite = true;
+
+        for (int i = 0; i < u.Length; i++)
+        {
+            if (u[i] != v[i]) same = false;
+            if (u[i] != -v[i]) opposite = false;
+            if (!same && !opposite) return false;
+        }
+
+        return true;
     }
 
     /// <summary>Whether the column at <paramref name="start"/> is parallel to any of the first <paramref name="count"/> columns of <paramref name="panel"/>.</summary>
-    private static bool IsParallelToAny(int n, double[] column, int start, double[] panel, int count)
+    private static bool IsParallelToAny<T>(int n, T[] column, int start, T[] panel, int count)
+        where T : unmanaged, INumberBase<T>
     {
-        ReadOnlySpan<double> candidate = column.AsSpan(start, n);
+        ReadOnlySpan<T> candidate = column.AsSpan(start, n);
 
         for (int j = 0; j < count; j++)
         {
-            if (IsParallel(n, candidate, panel.AsSpan(j * n, n))) return true;
+            if (IsParallel<T>(candidate, panel.AsSpan(j * n, n))) return true;
         }
 
         return false;
     }
 
     /// <summary>Every column of S has already appeared in S_old.</summary>
-    private static bool AllColumnsParallel(int n, int t, double[] s, double[] sOld)
+    private static bool AllColumnsParallel<T>(int n, int t, T[] s, T[] sOld)
+        where T : unmanaged, INumberBase<T>
     {
         for (int j = 0; j < t; j++)
         {
@@ -291,7 +354,8 @@ public static class NormEstimate
     /// Resample any column of S that duplicates an earlier column of S or a
     /// column of S_old. Duplicates waste a product without adding information.
     /// </summary>
-    private static void MakeColumnsDistinct(Random rng, int n, int t, double[] s, double[] sOld)
+    private static void MakeColumnsDistinct<T>(Random rng, int n, int t, T[] s, T[] sOld)
+        where T : unmanaged, INumberBase<T>
     {
         for (int j = 0; j < t; j++)
         {
@@ -337,18 +401,20 @@ public static class NormEstimate
         Array.Copy(scratch, order, n);
     }
 
-    private static double ColumnOneNorm(double[] panel, int start, int n)
+    private static double ColumnOneNorm<T, TKernels>(T[] panel, int start, int n)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
     {
         double sum = 0.0;
-        for (int i = 0; i < n; i++) sum += Math.Abs(panel[start + i]);
+        for (int i = 0; i < n; i++) sum += TKernels.Magnitude(panel[start + i]);
         return sum;
     }
 }
 
 /// <summary>
-/// Condition estimation in the 1-norm, the equivalent of LAPACK's dgecon.
-/// Reached through <see cref="LuDecomposition.ReciprocalCondition"/>, which
-/// supplies the norm of the original matrix itself.
+/// Condition estimation in the 1-norm, the equivalent of LAPACK's dgecon and
+/// zgecon. Reached through the <c>ReciprocalCondition</c> extensions, which
+/// supply the norm of the original matrix themselves.
 /// </summary>
 internal static class Condition
 {
@@ -361,11 +427,11 @@ internal static class Condition
     /// returned is an OVER-estimate of the reciprocal condition number: a small
     /// result reliably means ill-conditioning, a large one is weaker evidence
     /// of good conditioning. This is the same asymmetry dgecon has, and the
-    /// reason <see cref="LuDecomposition.PivotRatio"/> is not a substitute.
+    /// reason <see cref="LuDecomposition{T}.PivotRatio"/> is not a substitute.
     /// </summary>
     public static double ReciprocalOne(
         double normOfA,
-        LuDecomposition lu,
+        LuDecomposition<double> lu,
         int columns = NormEstimate.DefaultColumns,
         int maxIterations = NormEstimate.DefaultMaxIterations,
         int seed = NormEstimate.DefaultSeed)
@@ -374,9 +440,28 @@ internal static class Condition
 
         if (lu.IsSingular || normOfA == 0.0 || lu.Rows == 0) return 0.0;
 
-        var op = new LuInverseOperator(lu);
-        double inverseNorm = NormEstimate.Of(op, columns, maxIterations, seed).Value;
+        double inverseNorm = NormEstimate.Of(new LuInverseOperator<double>(lu), columns, maxIterations, seed).Value;
 
-        return inverseNorm == 0.0 ? 0.0 : 1.0 / (normOfA * inverseNorm);
+        return Reciprocal(normOfA, inverseNorm);
     }
+
+    /// <summary>The same estimate for a complex factorization: the inverse's adjoint is the adjoint solve.</summary>
+    public static double ReciprocalOne(
+        double normOfA,
+        LuDecomposition<Complex> lu,
+        int columns = NormEstimate.DefaultColumns,
+        int maxIterations = NormEstimate.DefaultMaxIterations,
+        int seed = NormEstimate.DefaultSeed)
+    {
+        ArgumentNullException.ThrowIfNull(lu);
+
+        if (lu.IsSingular || normOfA == 0.0 || lu.Rows == 0) return 0.0;
+
+        double inverseNorm = NormEstimate.Of(new LuInverseOperator<Complex>(lu), columns, maxIterations, seed).Value;
+
+        return Reciprocal(normOfA, inverseNorm);
+    }
+
+    private static double Reciprocal(double normOfA, double inverseNorm) =>
+        inverseNorm == 0.0 ? 0.0 : 1.0 / (normOfA * inverseNorm);
 }

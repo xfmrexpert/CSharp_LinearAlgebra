@@ -473,19 +473,24 @@ public class ComplexExponentialTests
     }
 
     /// <summary>
-    /// An operator reports whatever order it likes, and twice that order sizes
-    /// the real representation. An order whose double does not fit an int must
-    /// be an argument error, checked before anything is sized from it -- not an
-    /// OverflowException from the checked arithmetic, which is the wrong
-    /// diagnosis for a bad argument.
+    /// An operator reports whatever order it likes. The native path sizes
+    /// nothing from it before checking B against it, so a hostile order is
+    /// the ordinary argument error. The embedding oracle sizes a 2n-order
+    /// representation, so there an order whose double does not fit an int
+    /// must be refused first -- an argument error, not an OverflowException
+    /// from the checked arithmetic, which is the wrong diagnosis.
     /// </summary>
     [Fact]
-    public void MatrixFreeRejectsAnOrderWhoseRealRepresentationCannotExist()
+    public void AHostileOrderIsAnArgumentErrorOnBothRoutes()
     {
         var b = RandomComplex(4, 1, seed: 46);
+        var op = new HostileOrderOperator(int.MaxValue / 2 + 1);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => MatrixExponentialAction.Expmv(
-            new HostileOrderOperator(int.MaxValue / 2 + 1), b.ReadOnlyView, 1.0, 1.0));
+        Assert.IsType<ArgumentException>(Assert.ThrowsAny<ArgumentException>(
+            () => MatrixExponentialAction.Expmv(op, b.ReadOnlyView, 1.0, 1.0)));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ComplexEmbedding.Expmv(op, b.ReadOnlyView, 1.0, 1.0));
     }
 
     [Theory]

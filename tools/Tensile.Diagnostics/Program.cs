@@ -307,7 +307,51 @@ public static class Program
         Report("skewed, t=2", nonNegative: false, skewed: true, columns: 2);
         Report("skewed, t=4", nonNegative: false, skewed: true, columns: 4);
 
+        // The complex estimator on the complex counterparts of the signed
+        // ensembles: entries uniform in the unit square rather than on an
+        // interval. Its signs are unit-modulus directions and it skips the
+        // parallel-column resampling, so there is no reason to expect the real
+        // rates, and the rows are here to show what they are instead.
+        ReportComplex("complex, t=2", skewed: false, columns: 2);
+        ReportComplex("complex, t=4", skewed: false, columns: 4);
+        ReportComplex("cx skewed, t=2", skewed: true, columns: 2);
+        ReportComplex("cx skewed, t=4", skewed: true, columns: 4);
+
         Console.WriteLine();
+
+        static void ReportComplex(string label, bool skewed, int columns)
+        {
+            int[] sizes = [4, 9, 16, 33, 64, 129, 256];
+            int cases = 0;
+            int exact = 0;
+            double worst = double.PositiveInfinity;
+
+            foreach (int n in sizes)
+            {
+                for (int trial = 0; trial < 40; trial++)
+                {
+                    var a = new Matrix<System.Numerics.Complex>(n, n);
+                    var rng = new Random(n * 1000 + trial);
+
+                    for (int j = 0; j < n; j++)
+                    {
+                        double weight = skewed && j % 7 == 0 ? 10.0 : 1.0;
+
+                        for (int i = 0; i < n; i++)
+                            a[i, j] = new System.Numerics.Complex(weight * (rng.NextDouble() - 0.5), weight * (rng.NextDouble() - 0.5));
+                    }
+
+                    double truth = a.OneNorm();
+                    double estimate = a.EstimateOneNorm(columns: columns);
+
+                    cases++;
+                    if (estimate >= truth * (1.0 - 1e-13)) exact++;
+                    worst = Math.Min(worst, estimate / truth);
+                }
+            }
+
+            Console.WriteLine($"  {label,-16}  {exact,4}/{cases} ({(double)exact / cases,6:P1})   {worst:F4}");
+        }
 
         static void Report(string label, bool nonNegative, bool skewed, int columns)
         {

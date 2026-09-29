@@ -96,9 +96,9 @@ public static partial class MatrixOperations
     /// reliably means ill-conditioning, a large one is weaker evidence of good
     /// conditioning.
     ///
-    /// An extension on the real decomposition only, for now: the complex one
-    /// needs the complex norm estimator, and until that exists asking for it
-    /// is a compile error rather than a run-time one.
+    /// An extension on the closed type, beside the complex one, because it
+    /// needs a norm estimator for the element type: on a decomposition of any
+    /// other type, asking for it is a compile error rather than a run-time one.
     /// </summary>
     /// <param name="lu">The factorization.</param>
     /// <param name="columns">Probe columns for the estimator; more costs more products.</param>

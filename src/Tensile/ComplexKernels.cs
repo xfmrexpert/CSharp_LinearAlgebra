@@ -117,6 +117,15 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
     public static Complex Conjugate(Complex value) => Complex.Conjugate(value);
 
     /// <inheritdoc/>
+    public static Complex Sign(Complex value)
+    {
+        if (value == Complex.Zero) return Complex.One;
+
+        double modulus = Complex.Abs(value);
+        return new Complex(value.Real / modulus, value.Imaginary / modulus);
+    }
+
+    /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<Complex> a)
     {
         if (a.Rows == 0 || a.Columns == 0) return 0.0;

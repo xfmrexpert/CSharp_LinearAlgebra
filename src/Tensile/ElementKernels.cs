@@ -31,7 +31,7 @@ namespace Tensile;
 /// implementation for every element type at once, so the interface is shaped
 /// by more than one case rather than guessed from one. LU brought
 /// <see cref="PivotMagnitude"/> and <see cref="Conjugate"/>; the norm
-/// estimator's needs join it with complex <c>normest1</c>.
+/// estimator brought <see cref="Sign"/>.
 ///
 /// Internal: the public surface stays concrete, with overloads only for the
 /// element types that implement this, so an element type with no arithmetic
@@ -66,6 +66,13 @@ internal interface IElementKernels<T> where T : unmanaged, INumberBase<T>
     /// <summary>The complex conjugate; the identity for a real type. What turns a transpose into an adjoint.</summary>
     static abstract T Conjugate(T value);
 
+    /// <summary>
+    /// The direction of <paramref name="value"/>, of unit modulus, with the
+    /// direction of zero taken as 1: +/-1 for a real number, z/|z| for a
+    /// complex one. The norm estimator's sign matrix is made of these.
+    /// </summary>
+    static abstract T Sign(T value);
+
     /// <summary>||A||_1, the largest column sum of magnitudes. Exact, O(m*n).</summary>
     static abstract double OneNorm(ReadOnlyMatrixView<T> a);
 
@@ -98,6 +105,10 @@ internal readonly struct DoubleKernels : IElementKernels<double>
 
     /// <inheritdoc/>
     public static double Conjugate(double value) => value;
+
+    /// <inheritdoc/>
+    /// <remarks>Anything not at least zero, NaN included, is taken as negative -- the rule the real estimator always had.</remarks>
+    public static double Sign(double value) => value >= 0.0 ? 1.0 : -1.0;
 
     /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<double> a) => a.OneNorm();

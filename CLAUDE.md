@@ -45,9 +45,10 @@ extensions on the closed `Matrix<double>`, so adding a type is additive.
 Complex is arriving one primitive at a time: complex products are native (the
 4M method over the real GEMM, `ComplexKernels`), so are LU and its solves (one
 blocked algorithm written over the element type, `BlockedLu`, behind a single
-`LuDecomposition<T>`), and the complex exponentials (`Expm`/`Expmv` on
-`Matrix<Complex>`) still reach the real code through `ComplexEmbedding` until
-a complex norm estimator exists.
+`LuDecomposition<T>`), so is the 1-norm estimator and the condition estimate
+built on it (one `NormEstimate` core over the element type), and the complex
+exponentials (`Expm`/`Expmv` on `Matrix<Complex>`) still reach the real code
+through `ComplexEmbedding` until they are rebuilt on those primitives.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
@@ -84,8 +85,8 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/MatrixShape.cs` | Self-validating shape value; all extent/offset arithmetic, checked in `long` |
 | `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`: `Span`-backed ref structs, obtained only by `Bind` or slicing; no pointer constructor |
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
-| `src/Tensile/LinearOperators.cs` | `ILinearOperator<T>` / `IAdjointOperator<T>` over views (the public extension points), `DenseMatrixOperator` (A^p), `LuInverseOperator` |
-| `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays; `Condition` (dgecon-equivalent) |
+| `src/Tensile/LinearOperators.cs` | `ILinearOperator<T>` / `IAdjointOperator<T>` over views (the public extension points), `DenseMatrixOperator` (A^p, real), `LuInverseOperator<T>`, and the internal `ComplexDenseOperator` (A^p by four real panel products on the split parts) |
+| `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays, written once over the element type with `double` and `Complex` overloads; `Condition` (dgecon/zgecon-equivalent) |
 | `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
 | `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
 | `src/Tensile/*.Complex.cs` | The complex public surface (`Expm`, `Expmv`, `Multiply` on `Workspace` and `MatrixOperations`), as partials of the real classes, so an implementation can change behind a signature that does not move |
@@ -105,7 +106,7 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1557 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `tests/Tensile.Tests/` | xunit.v3, 1610 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
 | `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route |
 | `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
@@ -707,6 +708,18 @@ well- and ill-conditioned inputs.
    maxima, the descending sort and the unit-vector selection, without asserting
    any particular estimate.
 
+   The complex estimator gets the same three invariants plus two of its own.
+   A real matrix passed as complex must give the real estimator's result
+   *exactly* — value, iterations and product count — because every complex
+   sign of a real number is +/-1, every modulus is the absolute value, and the
+   split products with zero imaginary parts are the real products bit for bit;
+   the only thing the complex path omits is the parallel-column resampling,
+   which those inputs never trigger. That pins the new path to the verified
+   one. And multiplying the rows by unit phases must change nothing, since
+   Y and sign(Y) rotate together and cancel in A^H sign(Y); that is the test
+   where the signs are genuinely complex, and it fails if they are not (checked
+   by breaking `Sign` on purpose).
+
    Exactness depends heavily on the ensemble, which is why `tensile-diag`
    reports several rather than one number. On *uniform* random signed matrices
    it is exact 26% of the time at `t=2` and 41% at `t=4`; with a few dominant
@@ -715,7 +728,9 @@ well- and ill-conditioned inputs.
    percent, so picking the exact argmax among n near-ties is hard and missing
    it is nearly free. Worst observed ratio is 0.76, well inside the factor of
    two the algorithm promises. An earlier revision of this file quoted 38% and
-   55% from the skewed ensemble alone.
+   55% from the skewed ensemble alone. The complex estimator on the complex
+   counterparts of those ensembles is exact 27% and 41% (uniform) and 60% and
+   75% (skewed) of the time, worst ratio 0.79 — the real rates, near enough.
 
 9. **Dumping JIT disassembly through `dotnet run` loses methods.** The SDK
    driver and the application are separate processes and both honour
@@ -941,7 +956,8 @@ well- and ill-conditioned inputs.
   `T` but obtained only for `double` and `Complex`, because only they have a
   factory; members that need more than the factors (`ReciprocalCondition`,
   which needs a norm estimator) are extensions on the closed types that have
-  one, so asking for the missing one is a compile error. `BlockedLu` for
+  one, so asking for the missing one is a compile error. (`double` and
+  `Complex` both have one now.) `BlockedLu` for
   double is kept as the kernel's oracle: same pivot rule, same arithmetic
   (the kernel's axpy is `y + a*x`, no FMA), so the tests hold it to exactly
   the kernel's pivots — far stronger than a residual. `SolveTransposed`
@@ -1017,8 +1033,16 @@ well- and ill-conditioned inputs.
   missing is a run on the 12700H, pinned and unpinned, which is two invocations
   and no rebuild. See "LU" above for how to read the report.
 - **`normest1` has not been cross-validated against MATLAB's `normest1` or
-  LAPACK's `dlacn2`.** It is verified by invariants instead — see finding 8 —
-  which is strong evidence but not the same thing.
+  LAPACK's `dlacn2`/`zlacn2`.** It is verified by invariants instead — see
+  finding 8 — which is strong evidence but not the same thing. The complex
+  form is pinned to the real one exactly on real inputs, which makes the real
+  cross-validation, when it happens, cover most of it.
+- **The complex dense operator is internal.** `EstimateOneNorm` on a complex
+  matrix uses `ComplexDenseOperator`, which snapshots A as split real and
+  imaginary parts; the public `DenseMatrixOperator` is real-only and
+  references its matrix. Whether the public type becomes generic, and whether
+  it should snapshot or reference, is for the native complex exponential to
+  decide — it is that operator's main consumer.
 - **The estimator's `PanelProduct` applications are O(n^2 t) with no
   blocking.** Fine at the sizes that matter for `dgecon`, and now load-bearing
   for `expmv`, whose whole inner loop is this path. It is the right primitive
@@ -1196,10 +1220,16 @@ a documented public API, and structure-typed dispatch. What remains:
       the kernel LU's pivots on every shape; a real matrix factored as
       complex pivoting exactly as the real kernel does; and solves agreeing
       with a real solve on the embedding, and |det|^2 with the embedding's
-      determinant. **What is not done**: no benchmark, block size unmeasured,
-      and no complex `ReciprocalCondition` until step 4.
-   4. Complex `normest1`: A^H for A^T, unit-modulus signs x/|x| for +-1, and
-      no parallel-column resampling, which only applies to real sign vectors.
+      determinant. **What is not done**: no benchmark, block size unmeasured.
+   4. ~~Complex `normest1`.~~ *Done.* One estimator core over the element
+      type, with A^H for A^T, unit-modulus signs x/|x| for +-1 (a new
+      `IElementKernels<T>.Sign`), and no parallel-column resampling, which only
+      applies to real sign vectors. The real overload performs the same
+      operations and random draws as before — `tensile-diag`'s estimator,
+      `expm` and `expmv` reports are identical before and after, over 1680
+      estimates. Complex `ReciprocalCondition` (zgecon), `EstimateOneNorm`,
+      `OneNorm` and `InfinityNorm` on `Matrix<Complex>` came with it; see
+      finding 8 for how it is verified.
    5. Native `expm`/`expmv`, verified against the embedding.
    6. Only if profiling asks: splitting inside packing (BLIS's 1M) instead of
       into temporaries, a complex micro-kernel, or split storage.

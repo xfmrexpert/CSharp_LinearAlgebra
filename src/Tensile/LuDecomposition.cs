@@ -69,8 +69,8 @@ public sealed class LuDecomposition<T> where T : unmanaged, INumberBase<T>
     /// Note that this is a narrower condition than "singular". A duplicated
     /// column is mathematically singular but its pivot comes out as rounding
     /// noise rather than an exact zero, so the factorization completes and this
-    /// stays false — identical to <c>dgetrf</c>. For a real factorization,
-    /// <c>ReciprocalCondition</c> asks about numerical singularity.
+    /// stays false — identical to <c>dgetrf</c>. <c>ReciprocalCondition</c>
+    /// asks about numerical singularity.
     /// </summary>
     public bool IsSingular => _factorization.IsSingular;
 

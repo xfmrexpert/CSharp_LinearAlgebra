@@ -166,6 +166,128 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
 }
 
 /// <summary>
+/// A dense complex matrix raised to a power, as an operator: the complex
+/// counterpart of <see cref="DenseMatrixOperator"/>, for the complex norm
+/// estimate. Internal, because the public shape of a complex dense operator is
+/// a decision that the native complex exponential should make rather than
+/// this one.
+///
+/// Each product is four real panel products on the split parts, the 4M
+/// method at panel width:
+///
+///     A X   = (Ar Xr - Ai Xi) + i (Ar Xi + Ai Xr)
+///     A^H X = (Ar^T Xr + Ai^T Xi) + i (Ar^T Xi - Ai^T Xr)
+///
+/// so the streamed real kernels do the O(n^2 t) work and the conjugate
+/// transpose needs no kernel of its own. Unlike the real operator this one
+/// takes a snapshot: A is split once, at construction, because splitting it
+/// again for every product would cost O(n^2) against O(n^2 t) of work. Later
+/// writes to the matrix are therefore not seen.
+/// </summary>
+internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
+{
+    private readonly Matrix<double> _real;
+    private readonly Matrix<double> _imaginary;
+    private readonly int _power;
+
+    /// <exception cref="ArgumentException">The matrix is not square.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The power is less than 1.</exception>
+    public ComplexDenseOperator(Matrix<Complex> a, int power = 1)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentOutOfRangeException.ThrowIfLessThan(power, 1);
+
+        if (!a.IsSquare)
+            throw new ArgumentException($"A linear operator must be square, got {a.Rows}x{a.Columns}.", nameof(a));
+
+        _real = new Matrix<double>(a.Rows, a.Columns);
+        _imaginary = new Matrix<double>(a.Rows, a.Columns);
+        Split(a.ReadOnlyView, _real.View, _imaginary.View);
+        _power = power;
+    }
+
+    /// <inheritdoc/>
+    public int Order => _real.Rows;
+
+    /// <inheritdoc/>
+    public void Apply(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) => Repeat(x, y, adjoint: false);
+
+    /// <inheritdoc/>
+    public void ApplyAdjoint(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) => Repeat(x, y, adjoint: true);
+
+    /// <summary>(A^p)^H = (A^H)^p, so both directions are the same loop over one product.</summary>
+    private void Repeat(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y, bool adjoint)
+    {
+        if (x.Rows != Order)
+            throw new ArgumentException($"Panel has {x.Rows} rows, expected the operator's order {Order}.", nameof(x));
+
+        if (y.Rows != Order || y.Columns != x.Columns)
+            throw new ArgumentException($"Result panel is {y.Rows}x{y.Columns}, expected {Order}x{x.Columns}.", nameof(y));
+
+        if (Order == 0 || x.Columns == 0) return;
+
+        // Six n x t real panels per call, on the ordinary heap: the
+        // estimator applies an operator a handful of times, and the pinned
+        // heap, which is never compacted, is for storage that lives.
+        var shape = new MatrixShape(Order, x.Columns);
+        string purpose = $"an {Order}x{x.Columns} split panel";
+        MatrixView<double> xr = Panel(shape, purpose), xi = Panel(shape, purpose);
+        MatrixView<double> p = Panel(shape, purpose), q = Panel(shape, purpose);
+        MatrixView<double> r = Panel(shape, purpose), u = Panel(shape, purpose);
+
+        Split(x, xr, xi);
+
+        for (int step = 0; step < _power; step++)
+        {
+            if (step > 0) Split(y, xr, xi);
+
+            Product(_real.ReadOnlyView, xr, p, adjoint);        // Ar Xr
+            Product(_imaginary.ReadOnlyView, xi, q, adjoint);   // Ai Xi
+            Product(_real.ReadOnlyView, xi, r, adjoint);        // Ar Xi
+            Product(_imaginary.ReadOnlyView, xr, u, adjoint);   // Ai Xr
+
+            for (int j = 0; j < x.Columns; j++)
+            {
+                ReadOnlySpan<double> pj = p.Column(j), qj = q.Column(j);
+                ReadOnlySpan<double> rj = r.Column(j), uj = u.Column(j);
+                Span<Complex> target = y.Column(j);
+
+                for (int i = 0; i < target.Length; i++)
+                {
+                    target[i] = adjoint
+                        ? new Complex(pj[i] + qj[i], rj[i] - uj[i])
+                        : new Complex(pj[i] - qj[i], rj[i] + uj[i]);
+                }
+            }
+        }
+    }
+
+    private static MatrixView<double> Panel(MatrixShape shape, string purpose) =>
+        MatrixView<double>.Bind(Storage.Array<double>(shape.RequiredExtent, purpose), shape);
+
+    private static void Product(ReadOnlyMatrixView<double> a, ReadOnlyMatrixView<double> x, MatrixView<double> y, bool transposed)
+    {
+        if (transposed) KernelEntry.MultiplyPanelTransposed(a.ToOperand(), x.ToOperand(), y.ToTarget());
+        else KernelEntry.MultiplyPanel(a.ToOperand(), x.ToOperand(), y.ToTarget());
+    }
+
+    private static void Split(ReadOnlyMatrixView<Complex> source, MatrixView<double> real, MatrixView<double> imaginary)
+    {
+        for (int j = 0; j < source.Columns; j++)
+        {
+            ReadOnlySpan<Complex> column = source.Column(j);
+            Span<double> re = real.Column(j), im = imaginary.Column(j);
+
+            for (int i = 0; i < column.Length; i++)
+            {
+                re[i] = column[i].Real;
+                im[i] = column[i].Imaginary;
+            }
+        }
+    }
+}
+
+/// <summary>
 /// The inverse of an LU-factored matrix, as an operator: applying it solves
 /// rather than multiplying. This is what turns the 1-norm estimator into a
 /// condition estimator, since cond_1(A) = ||A||_1 * ||A^-1||_1 and the second

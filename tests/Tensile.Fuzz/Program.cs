@@ -214,8 +214,8 @@ internal static class Script
                     case 14:
                     {
                         // The complex surface: the 4M product, the exponentials
-                        // through the real embedding, the action, and LU with
-                        // its solves. Hostile dimensions make most of these
+                        // through the real embedding, the action, the norm
+                        // estimate, and LU with its condition and solves. Hostile dimensions make most of these
                         // non-square and rejected, which is the point; t stays
                         // in [-2, 2] so a square case costs milliseconds rather
                         // than looking like a hang.
@@ -232,10 +232,14 @@ internal static class Script
                         _ = z.Multiply(z);
                         _ = z.Expm();
                         _ = z.Expmv(z.ReadOnlyView, t);
+                        _ = z.EstimateOneNorm(power: 2);
 
                         // Last, because a singular z throws from the solves,
                         // and anything after them would stop being reached.
+                        // The condition estimate returns 0 for a singular z
+                        // rather than throwing, so it goes before them.
                         LuDecomposition<Complex> zlu = z.FactorLu(blockSize: 1 + (z.Rows % 4));
+                        _ = zlu.ReciprocalCondition();
                         _ = zlu.Determinant();
                         _ = zlu.Solve(z);
                         _ = zlu.SolveAdjoint(z);

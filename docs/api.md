@@ -167,9 +167,10 @@ double det    = lu.Determinant();
 `LuDecomposition<T>` is one type for every element type the library factors —
 `double` and `Complex` (see [Complex matrices](#complex-matrices)). It has no
 public constructor; it comes only from `FactorLu`, which exists only for element
-types with arithmetic. `ReciprocalCondition` is an extension on
-`LuDecomposition<double>` alone until the complex norm estimator lands, so on a
-complex factorization it is a compile error rather than a run-time one.
+types with arithmetic. `ReciprocalCondition` is an extension on the closed
+types that have a norm estimator — `LuDecomposition<double>` and
+`LuDecomposition<Complex>` — so on any other element type it would be a compile
+error rather than a run-time one.
 
 The adjoint solve replaced `SolveTransposed` when the type became generic. For a
 real factorization they are the same solve; for a complex one the transpose is
@@ -231,6 +232,16 @@ small value reliably means ill-conditioning while a large one is weaker evidence
 of good conditioning. Unlike `dgecon` it needs no norm argument — the norm of
 the original was captured before the factorization overwrote it, so it cannot be
 given the wrong one.
+
+All of this works on `Matrix<Complex>` too, where ‖A‖₁ is the largest column sum
+of moduli: `OneNorm`, `InfinityNorm`, `EstimateOneNorm(power)`, and
+`ReciprocalCondition` on a complex factorization (the `zgecon` equivalent). The
+complex estimator is the same algorithm with the adjoint Aᴴ for Aᵀ, the
+direction z/|z| for the sign ±1, and no resampling of parallel sign columns —
+complex signs essentially never repeat. Measured by `tensile-diag` on the complex
+counterparts of the real ensembles, it is exact about as often as the real one
+(27% and 41% on uniform matrices at t = 2 and 4, 60% and 75% with dominant
+columns), and its worst ratio was 0.79.
 
 ---
 
@@ -307,7 +318,8 @@ double rcond = lu.ReciprocalCondition();                                        
 ```
 
 `NormEstimate.Of` is Higham and Tisseur's block 1-norm estimator, the algorithm
-behind MATLAB's `normest1`. The result is always a **lower bound**, exact on
+behind MATLAB's `normest1`, with overloads for `IAdjointOperator<double>` and
+`IAdjointOperator<Complex>`. The result is always a **lower bound**, exact on
 most matrices and rarely off by more than a factor of two, and deterministic
 for a given seed. It never sees the operator's entries — only the products — so
 an operator that has no entries works as well as one that does.
@@ -530,13 +542,13 @@ stability, and it needs no square root.
 The algorithm is the real one, blocked the same way, written once over the
 element type. Its trailing updates — nearly all of the work — are 4M products on
 the workspace's real GEMM. The panels and triangular solves are safe managed
-code, slower per flop than the real kernel's but O(n²·nb) of the total. Two
-things it does not have yet:
+code, slower per flop than the real kernel's but O(n²·nb) of the total.
 
-- **No condition estimate.** `ReciprocalCondition` is real-only until the
-  complex norm estimator exists.
-- **No measured block size.** The default is the real factorization's, which
-  was measured for real; whether complex wants a different one is open.
+`lu.ReciprocalCondition()` works on a complex factorization as it does on a
+real one (see [Norms and conditioning](#norms-and-conditioning)). What it does
+not have yet is a **measured block size**: the default is the real
+factorization's, which was measured for real; whether complex wants a different
+one is open.
 
 ### Exponentials
 
@@ -603,9 +615,11 @@ exactly, and apply the operator without it.
 
 ## Not here yet
 
-- **Complex norm estimation and condition numbers.** Complex products, LU and
-  solves are native; the exponentials above still reach complex matrices
-  through a real representation until the norm estimator exists too.
+- **Native complex exponentials.** Complex products, LU, solves and norm
+  estimation are native; the exponentials above still reach complex matrices
+  through a real representation, until they are rebuilt on those.
+- **A public complex dense operator.** `EstimateOneNorm` on a complex matrix
+  uses an internal one; `DenseMatrixOperator` is real-only.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for
   `SymmetricPositiveDefinite`; nothing dispatches to it yet.
 - **Arithmetic for any type but `double` and `Complex`.** Storage is generic;

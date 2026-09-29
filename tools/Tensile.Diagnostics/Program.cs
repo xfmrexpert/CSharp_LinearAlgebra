@@ -55,6 +55,7 @@ public static class Program
             ReportEstimatorAccuracy();
             ReportExponentialAccuracy();
             ReportExponentialActionCost();
+            ReportComplexExponentialRoutes();
         }
 
         Console.WriteLine(passed ? "kernel checks: PASS" : "kernel checks: FAIL");
@@ -519,6 +520,77 @@ public static class Program
             }
 
             return difference / Math.Max(reference, 1.0);
+        }
+    }
+
+    /// <summary>
+    /// The native complex exponentials against the embedded route they
+    /// replaced, on random complex matrices: the parameters each chose, and
+    /// how far apart the answers are.
+    ///
+    /// A report rather than an assertion because the difference in parameters
+    /// is a distribution, not an invariant. The native route reads complex
+    /// norms and the embedded one real norms up to sqrt(2) larger, so the
+    /// native scaling is usually no larger -- but the ||A^k||^(1/k) terms are
+    /// estimates, lower bounds of two different quantities, and nothing forces
+    /// the order on any one matrix. What the suite does assert is that the two
+    /// answers agree; this shows by how much, and what each route paid.
+    /// </summary>
+    private static void ReportComplexExponentialRoutes()
+    {
+        Console.WriteLine("=== complex exponentials: native against embedded ===");
+        Console.WriteLine("  expm: Pade degree / squarings; expmv (one column, t = 1): Taylor degree x scaling, applications");
+        Console.WriteLine("     n     ||A||_1   expm native  embedded     rel.diff   expmv native     embedded     rel.diff");
+
+        foreach ((int n, double norm) in new[] { (16, 1.0), (16, 20.0), (64, 5.0), (64, 100.0), (128, 30.0), (128, 300.0) })
+        {
+            var a = new Matrix<System.Numerics.Complex>(n, n);
+            var rng = new Random(n * 7919 + (int)norm);
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    a[i, j] = new System.Numerics.Complex(rng.NextDouble() - 0.5, rng.NextDouble() - 0.5);
+
+            double scale = norm / a.OneNorm();
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    a[i, j] *= scale;
+
+            var b = new Matrix<System.Numerics.Complex>(n, 1);
+            for (int i = 0; i < n; i++) b[i, 0] = new System.Numerics.Complex(rng.NextDouble() - 0.5, rng.NextDouble() - 0.5);
+
+            var nativeExpm = new ExpmDiagnostics();
+            var embeddedExpm = new ExpmDiagnostics();
+            var native = MatrixExponential.Expm(a, workspace: null, nativeExpm);
+            var embedded = ComplexEmbedding.Expm(a, workspace: null, embeddedExpm);
+
+            var nativeAction = new ExpmvDiagnostics();
+            var embeddedAction = new ExpmvDiagnostics();
+            var nativeY = MatrixExponentialAction.Expmv(a, b.ReadOnlyView, 1.0, nativeAction);
+            var embeddedY = ComplexEmbedding.Expmv(a, b.ReadOnlyView, 1.0, embeddedAction);
+
+            Console.WriteLine(
+                $"  {n,4}  {norm,10:G4}  {nativeExpm.Degree,5} /{nativeExpm.Squarings,3}  {embeddedExpm.Degree,5} /{embeddedExpm.Squarings,3}"
+                + $"   {RelativeDifference(native, embedded),10:E3}"
+                + $"   {nativeAction.Degree,3}x{nativeAction.Scaling,-3} {nativeAction.Applications,4}"
+                + $"   {embeddedAction.Degree,3}x{embeddedAction.Scaling,-3} {embeddedAction.Applications,4}"
+                + $"   {RelativeDifference(nativeY, embeddedY),10:E3}");
+        }
+
+        Console.WriteLine();
+
+        static double RelativeDifference(Matrix<System.Numerics.Complex> x, Matrix<System.Numerics.Complex> y)
+        {
+            double difference = 0.0, size = 0.0;
+            for (int j = 0; j < x.Columns; j++)
+            {
+                for (int i = 0; i < x.Rows; i++)
+                {
+                    difference = Math.Max(difference, System.Numerics.Complex.Abs(x[i, j] - y[i, j]));
+                    size = Math.Max(size, System.Numerics.Complex.Abs(y[i, j]));
+                }
+            }
+
+            return size == 0.0 ? difference : difference / size;
         }
     }
 

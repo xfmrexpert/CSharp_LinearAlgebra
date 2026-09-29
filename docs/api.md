@@ -564,50 +564,43 @@ In the standard multiconductor-line formulation this is the chain-parameter
 matrix Φ(ℓ) = exp(Mℓ), with M = [[0, −Z(ω)], [−Y(ω), 0]] complex at each
 frequency, so a frequency sweep is one of these per frequency.
 
-**How they are computed today.** There is no complex LU or norm estimator
-yet, so these run the real algorithms on the real representation of the
-complex matrix: X + iY becomes
-the 2n×2n matrix [[X, −Y], [Y, X]], which the exponential commutes with. The
-answer is the real algorithm's, verified against an independent complex Taylor
-series and against invariants such as exp(iH) being unitary for Hermitian H.
-The public signatures will not change when native complex primitives replace
-this.
+**How they are computed.** Natively: the same algorithms as the real
+overloads — Al-Mohy and Higham's scaling and squaring for `Expm`, their
+truncated Taylor action for `Expmv` — written once over the element type and
+run in complex arithmetic. Products are 4M complex products on the workspace's
+GEMM, the Padé denominator is factored by the complex LU, and the
+‖Aᵏ‖^(1/k) estimates come from the complex norm estimator. For `double` the
+same code performs exactly the operations the real-only implementation did.
 
-What the route costs, compared with a native implementation that does not
-exist yet:
+They were first computed through the real representation of the complex
+matrix — X + iY as the 2n×2n real [[X, −Y], [Y, X]], which the exponential
+commutes with — and that route is kept, internally, as the oracle the native
+one is tested against. Against it, the native route does half the flops for
+`Expm`, needs half the memory, and chooses its scaling from the complex norms
+rather than from real ones up to √2 larger; on random complex matrices
+`tensile-diag` shows it never taking more squarings, and sometimes one fewer.
+On a development container (noisy; within-run ratios) native `Expm` measured
+1.26× faster than the embedded route at n=64 and 1.49× at n=256, and native
+`Expmv` level at n=64 and 1.47× faster at n=256. Not yet measured on the
+verification machine; `ComplexExponentialBenchmarks` is the instrument.
 
-| | `Expm` | `Expmv` |
-| --- | --- | --- |
-| Flops | 2× — each product computes every block twice | 1× — the stacked panel is not redundant |
-| Memory | 2× | 2× for the matrix |
-| Parameter choice | at most one extra squaring | scaling up to √2 larger |
-
-The last row is because the embedded 1-norm is between 1 and √2 times the
-complex one. Random complex matrices sit near √2 (1.28–1.39 measured); real
-ones sit at exactly 1, and a real matrix passed as complex takes exactly the
-real path, parameters included. `Expmv` is memory-bound, so expect its time
-nearer twice a native version's than level with it despite equal flops —
-unmeasured.
-
-`Expmv` removes the **imaginary** part of the trace shift itself before
-embedding, because the real representation cannot: its trace is only
-2·Re(trace A). The shift comes back as a unit-modulus factor e^(itω), which
-cannot overflow. This matters for any operator carrying a large imaginary
-diagonal — a jωI term — where leaving it in cost up to 24× the work in
-measurement. (The MTL chain matrix has zero trace, so it is unaffected either
-way.)
+`Expmv` removes the whole trace shift μ = trace(A)/n, real and imaginary parts
+together, and restores it one factor exp(tμ/s) per scaling step. The imaginary
+part is the one that matters for an operator carrying a large jωI term; the
+embedded route could only remove it by special handling, and without that it
+cost up to 24× the work in measurement. (The MTL chain matrix has zero trace,
+so it is unaffected either way.)
 
 A matrix-free complex operator — an `ILinearOperator<Complex>` — has its own
-overload, which applies the operator through its real representation without
-ever forming it:
+overload:
 
 ```csharp
 var y = MatrixExponentialAction.Expmv(op, b.ReadOnlyView, t: 1.0, oneNormBound: bound);
 ```
 
 As with the real matrix-free overload, the scaling comes from the bound you
-supply (scaled internally by √2 for the real representation). There is no
-trace to shift by either, so an operator carrying a large jωI term keeps it.
+supply, an upper bound on the largest column sum of moduli. There is no trace
+to shift by either, so an operator carrying a large jωI term keeps it.
 If you know that shift, remove it yourself: exp(tA)B = e^(iωt)·exp(t(A − iωI))B,
 exactly, and apply the operator without it.
 
@@ -615,9 +608,6 @@ exactly, and apply the operator without it.
 
 ## Not here yet
 
-- **Native complex exponentials.** Complex products, LU, solves and norm
-  estimation are native; the exponentials above still reach complex matrices
-  through a real representation, until they are rebuilt on those.
 - **A public complex dense operator.** `EstimateOneNorm` on a complex matrix
   uses an internal one; `DenseMatrixOperator` is real-only.
 - **Cholesky, QR, SVD, eigenvalues.** The structure vocabulary has room for

@@ -126,6 +126,21 @@ internal readonly struct ComplexKernels : IElementKernels<Complex>
     }
 
     /// <inheritdoc/>
+    public static bool SignsAreDiscrete => false;
+
+    /// <inheritdoc/>
+    public static Complex Scale(Complex value, double factor) => new(value.Real * factor, value.Imaginary * factor);
+
+    /// <inheritdoc/>
+    public static Complex Exp(Complex value) => Complex.Exp(value);
+
+    /// <inheritdoc/>
+    public static IAdjointOperator<Complex> PowerOperator(Matrix<Complex> a, int power) => new ComplexDenseOperator(a, power);
+
+    /// <inheritdoc/>
+    public static LuDecomposition<Complex> FactorLuInPlace(Workspace workspace, Matrix<Complex> a) => workspace.FactorLu(a);
+
+    /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<Complex> a)
     {
         if (a.Rows == 0 || a.Columns == 0) return 0.0;

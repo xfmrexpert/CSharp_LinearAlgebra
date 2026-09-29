@@ -31,7 +31,12 @@ namespace Tensile;
 /// implementation for every element type at once, so the interface is shaped
 /// by more than one case rather than guessed from one. LU brought
 /// <see cref="PivotMagnitude"/> and <see cref="Conjugate"/>; the norm
-/// estimator brought <see cref="Sign"/>.
+/// estimator brought <see cref="Sign"/> and <see cref="SignsAreDiscrete"/>;
+/// the exponentials brought <see cref="Scale"/>, <see cref="Exp"/>, and the
+/// two members that are not arithmetic at all, <see cref="PowerOperator"/> and
+/// <see cref="FactorLuInPlace"/> -- the element type's own operator and
+/// factorization, which an algorithm written over <c>T</c> has no other way to
+/// reach without testing what <c>T</c> is.
 ///
 /// Internal: the public surface stays concrete, with overloads only for the
 /// element types that implement this, so an element type with no arithmetic
@@ -73,6 +78,38 @@ internal interface IElementKernels<T> where T : unmanaged, INumberBase<T>
     /// </summary>
     static abstract T Sign(T value);
 
+    /// <summary>
+    /// Whether <see cref="Sign"/> takes values in a finite set (+/-1), so that
+    /// two sign vectors can be exactly parallel and the norm estimator's
+    /// resampling of repeated columns means something. True for a real type.
+    /// </summary>
+    static abstract bool SignsAreDiscrete { get; }
+
+    /// <summary>
+    /// <paramref name="value"/> times a real <paramref name="factor"/>. For a
+    /// complex value, each part is scaled on its own: a complex product with
+    /// (factor + 0i) would compute the same thing with extra roundings that
+    /// happen to be exact, and a NaN from 0 * infinity in the one case where
+    /// they are not.
+    /// </summary>
+    static abstract T Scale(T value, double factor);
+
+    /// <summary>The scalar exponential.</summary>
+    static abstract T Exp(T value);
+
+    /// <summary>
+    /// A dense matrix raised to a power, as an operator with an adjoint: what
+    /// the norm estimator is pointed at to reach ||A^p||_1 without forming A^p.
+    /// </summary>
+    static abstract IAdjointOperator<T> PowerOperator(Matrix<T> a, int power);
+
+    /// <summary>
+    /// Factor <paramref name="a"/> in place on <paramref name="workspace"/>,
+    /// through the element type's own LU: the kernel factorization for a real
+    /// type, the generic blocked one for complex.
+    /// </summary>
+    static abstract LuDecomposition<T> FactorLuInPlace(Workspace workspace, Matrix<T> a);
+
     /// <summary>||A||_1, the largest column sum of magnitudes. Exact, O(m*n).</summary>
     static abstract double OneNorm(ReadOnlyMatrixView<T> a);
 
@@ -109,6 +146,21 @@ internal readonly struct DoubleKernels : IElementKernels<double>
     /// <inheritdoc/>
     /// <remarks>Anything not at least zero, NaN included, is taken as negative -- the rule the real estimator always had.</remarks>
     public static double Sign(double value) => value >= 0.0 ? 1.0 : -1.0;
+
+    /// <inheritdoc/>
+    public static bool SignsAreDiscrete => true;
+
+    /// <inheritdoc/>
+    public static double Scale(double value, double factor) => value * factor;
+
+    /// <inheritdoc/>
+    public static double Exp(double value) => Math.Exp(value);
+
+    /// <inheritdoc/>
+    public static IAdjointOperator<double> PowerOperator(Matrix<double> a, int power) => new DenseMatrixOperator(a, power);
+
+    /// <inheritdoc/>
+    public static LuDecomposition<double> FactorLuInPlace(Workspace workspace, Matrix<double> a) => workspace.FactorLu(a);
 
     /// <inheritdoc/>
     public static double OneNorm(ReadOnlyMatrixView<double> a) => a.OneNorm();

@@ -172,22 +172,29 @@ public sealed class DenseMatrixOperator : IAdjointOperator<double>
 /// a decision that the native complex exponential should make rather than
 /// this one.
 ///
-/// Each product is four real panel products on the split parts, the 4M
-/// method at panel width:
+/// Each product is two real panel products on the split parts, each over the
+/// stacked panel [Xr | Xi] of width 2t:
 ///
-///     A X   = (Ar Xr - Ai Xi) + i (Ar Xi + Ai Xr)
-///     A^H X = (Ar^T Xr + Ai^T Xi) + i (Ar^T Xi - Ai^T Xr)
+///     P = Ar [Xr | Xi],   Q = Ai [Xr | Xi]
+///     A X   = (P_r - Q_i) + i (P_i + Q_r)
+///     A^H X = (P_r + Q_i) + i (P_i - Q_r)      (with Ar^T and Ai^T in P, Q)
 ///
-/// so the streamed real kernels do the O(n^2 t) work and the conjugate
-/// transpose needs no kernel of its own. Unlike the real operator this one
-/// takes a snapshot: A is split once, at construction, because splitting it
-/// again for every product would cost O(n^2) against O(n^2 t) of work. Later
-/// writes to the matrix are therefore not seen.
+/// -- the 4M products, paired by the matrix they read. So each real part of A
+/// is streamed once per step, 2n^2 doubles against the 4n^2 of the real
+/// representation, and the conjugate transpose needs no kernel of its own.
+/// Unlike the real operator this one takes a snapshot: A is split once, at
+/// construction, because splitting it again for every product would cost
+/// O(n^2) against O(n^2 t) of work. Later writes to the matrix are therefore
+/// not seen.
 /// </summary>
 internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
 {
-    private readonly Matrix<double> _real;
-    private readonly Matrix<double> _imaginary;
+    // The split parts, on the ordinary heap: an operator is built per
+    // estimate, and pinned storage, which is never compacted, is for storage
+    // that lives. The views are re-bound over these for each product.
+    private readonly double[] _real;
+    private readonly double[] _imaginary;
+    private readonly MatrixShape _shape;
     private readonly int _power;
 
     /// <exception cref="ArgumentException">The matrix is not square.</exception>
@@ -200,14 +207,16 @@ internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
         if (!a.IsSquare)
             throw new ArgumentException($"A linear operator must be square, got {a.Rows}x{a.Columns}.", nameof(a));
 
-        _real = new Matrix<double>(a.Rows, a.Columns);
-        _imaginary = new Matrix<double>(a.Rows, a.Columns);
-        Split(a.ReadOnlyView, _real.View, _imaginary.View);
+        _shape = new MatrixShape(a.Rows, a.Columns);
+        string purpose = $"the split parts of an order-{a.Rows} complex operator";
+        _real = Storage.Array<double>(_shape.RequiredExtent, purpose);
+        _imaginary = Storage.Array<double>(_shape.RequiredExtent, purpose);
+        Split(a.ReadOnlyView, MatrixView<double>.Bind(_real, _shape), MatrixView<double>.Bind(_imaginary, _shape));
         _power = power;
     }
 
     /// <inheritdoc/>
-    public int Order => _real.Rows;
+    public int Order => _shape.Rows;
 
     /// <inheritdoc/>
     public void Apply(ReadOnlyMatrixView<Complex> x, MatrixView<Complex> y) => Repeat(x, y, adjoint: false);
@@ -226,37 +235,44 @@ internal sealed class ComplexDenseOperator : IAdjointOperator<Complex>
 
         if (Order == 0 || x.Columns == 0) return;
 
-        // Six n x t real panels per call, on the ordinary heap: the
+        // Three n x 2t real panels per call, on the ordinary heap: the
         // estimator applies an operator a handful of times, and the pinned
         // heap, which is never compacted, is for storage that lives.
-        var shape = new MatrixShape(Order, x.Columns);
-        string purpose = $"an {Order}x{x.Columns} split panel";
-        MatrixView<double> xr = Panel(shape, purpose), xi = Panel(shape, purpose);
-        MatrixView<double> p = Panel(shape, purpose), q = Panel(shape, purpose);
-        MatrixView<double> r = Panel(shape, purpose), u = Panel(shape, purpose);
+        int t = x.Columns;
 
-        Split(x, xr, xi);
+        // The stacked panel is twice as wide as X, which can exceed what a
+        // buffer addresses even though X itself fits.
+        if ((long)Order * 2 * t > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(x), $"An {Order}x{t} panel's stacked real parts, {Order}x{2L * t}, would not fit a buffer.");
+        }
+
+        var shape = new MatrixShape(Order, 2 * t);
+        string purpose = $"an {Order}x{2 * t} split panel";
+        MatrixView<double> stacked = Panel(shape, purpose);
+        MatrixView<double> p = Panel(shape, purpose), q = Panel(shape, purpose);
+
+        Split(x, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
 
         for (int step = 0; step < _power; step++)
         {
-            if (step > 0) Split(y, xr, xi);
+            if (step > 0) Split(y, stacked.Slice(0, 0, Order, t), stacked.Slice(0, t, Order, t));
 
-            Product(_real.ReadOnlyView, xr, p, adjoint);        // Ar Xr
-            Product(_imaginary.ReadOnlyView, xi, q, adjoint);   // Ai Xi
-            Product(_real.ReadOnlyView, xi, r, adjoint);        // Ar Xi
-            Product(_imaginary.ReadOnlyView, xr, u, adjoint);   // Ai Xr
+            Product(ReadOnlyMatrixView<double>.Bind(_real, _shape), stacked, p, adjoint);        // Ar [Xr | Xi]
+            Product(ReadOnlyMatrixView<double>.Bind(_imaginary, _shape), stacked, q, adjoint);   // Ai [Xr | Xi]
 
-            for (int j = 0; j < x.Columns; j++)
+            for (int j = 0; j < t; j++)
             {
-                ReadOnlySpan<double> pj = p.Column(j), qj = q.Column(j);
-                ReadOnlySpan<double> rj = r.Column(j), uj = u.Column(j);
+                ReadOnlySpan<double> pr = p.Column(j), pi = p.Column(t + j);
+                ReadOnlySpan<double> qr = q.Column(j), qi = q.Column(t + j);
                 Span<Complex> target = y.Column(j);
 
                 for (int i = 0; i < target.Length; i++)
                 {
                     target[i] = adjoint
-                        ? new Complex(pj[i] + qj[i], rj[i] - uj[i])
-                        : new Complex(pj[i] - qj[i], rj[i] + uj[i]);
+                        ? new Complex(pr[i] + qi[i], pi[i] - qr[i])
+                        : new Complex(pr[i] - qi[i], pi[i] + qr[i]);
                 }
             }
         }

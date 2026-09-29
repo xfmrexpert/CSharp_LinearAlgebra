@@ -175,27 +175,28 @@ public sealed class AllocationLimitTests : IDisposable
     }
 
     /// <summary>
-    /// The complex exponentials compute through a 2n x 2n real embedding,
-    /// four times the input's element count, so they can be refused under a
-    /// limit the input itself fits. That refusal must be the policy exception,
-    /// raised before any work -- not an out-of-memory somewhere inside the
-    /// real algorithm, and not silently skipped because the input passed.
+    /// The complex exponentials are native, so nothing they allocate is
+    /// larger than their input: a limit the input fits is a limit they fit.
+    /// The embedding they were first computed through needs a 2n x 2n real
+    /// matrix, four times the input's element count, and is still refused
+    /// under that same limit -- by the policy exception, raised before any
+    /// work, not by an out-of-memory somewhere inside the real algorithm.
     /// </summary>
     [Fact]
-    public void ComplexExponentialsAreRefusedWhenOnlyTheirEmbeddingExceedsTheLimit()
+    public void ComplexExponentialsNeedNoMoreThanTheirInputUnlikeTheEmbedding()
     {
         const int N = 32;
 
-        var a = Matrix.Identity<System.Numerics.Complex>(N);
-        var b = Matrix.Zeros<System.Numerics.Complex>(N, 1);
+        var a = ComplexLuTests.Random(N, N, seed: 1);
+        var b = ComplexLuTests.Random(N, 1, seed: 2);
 
-        TensileLimits.MaxElements = 2 * N * N;
+        TensileLimits.MaxElements = N * N;
 
-        // The premise: a matrix the size of the input is allowed under this limit.
-        _ = new Matrix<System.Numerics.Complex>(N, N);
+        _ = a.Expm();
+        _ = a.Expmv(b.ReadOnlyView);
 
-        Assert.Throws<AllocationLimitException>(() => a.Expm());
-        Assert.Throws<AllocationLimitException>(() => a.Expmv(b.ReadOnlyView));
+        Assert.Throws<AllocationLimitException>(() => ComplexEmbedding.Expm(a));
+        Assert.Throws<AllocationLimitException>(() => ComplexEmbedding.Expmv(a, b.ReadOnlyView, 1.0));
     }
 
     private sealed class UntouchedOperator(int order) : IAdjointOperator<double>

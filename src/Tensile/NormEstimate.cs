@@ -72,7 +72,7 @@ public static class NormEstimate
         int columns = DefaultColumns,
         int maxIterations = DefaultMaxIterations,
         int seed = DefaultSeed) =>
-        Estimate<double, DoubleKernels>(op, columns, maxIterations, seed, discreteSigns: true);
+        Estimate<double, DoubleKernels>(op, columns, maxIterations, seed);
 
     /// <summary>
     /// Estimate ||A||_1 for an arbitrary square complex operator, where
@@ -90,18 +90,22 @@ public static class NormEstimate
         int columns = DefaultColumns,
         int maxIterations = DefaultMaxIterations,
         int seed = DefaultSeed) =>
-        Estimate<Complex, ComplexKernels>(op, columns, maxIterations, seed, discreteSigns: false);
+        Estimate<Complex, ComplexKernels>(op, columns, maxIterations, seed);
 
     /// <summary>
-    /// The algorithm, once over the element type. <paramref name="discreteSigns"/>
-    /// says whether sign vectors are +/-1, which is what makes the tests for
-    /// parallel columns meaningful; it is true exactly for the real case.
-    /// For <see cref="double"/> this performs the same operations, in the same
-    /// order and with the same random draws, as the real-only estimator it
-    /// replaced, so real estimates did not move.
+    /// The algorithm, once over the element type, for the generic algorithms
+    /// that need an estimate without knowing <c>T</c>. Whether sign vectors are
+    /// +/-1 -- which is what makes the tests for parallel columns meaningful --
+    /// comes from <c>TKernels.SignsAreDiscrete</c>. For <see cref="double"/>
+    /// this performs the same operations, in the same order and with the same
+    /// random draws, as the real-only estimator it replaced, so real estimates
+    /// did not move.
     /// </summary>
-    private static NormEstimateResult Estimate<T, TKernels>(
-        IAdjointOperator<T> op, int columns, int maxIterations, int seed, bool discreteSigns)
+    internal static NormEstimateResult Estimate<T, TKernels>(
+        IAdjointOperator<T> op,
+        int columns = DefaultColumns,
+        int maxIterations = DefaultMaxIterations,
+        int seed = DefaultSeed)
         where T : unmanaged, INumberBase<T>
         where TKernels : struct, IElementKernels<T>
     {
@@ -212,7 +216,7 @@ public static class NormEstimate
             (s, sOld) = (sOld, s);
             for (int i = 0; i < extent; i++) s[i] = TKernels.Sign(y[i]);
 
-            if (discreteSigns && t > 1)
+            if (TKernels.SignsAreDiscrete && t > 1)
             {
                 if (AllColumnsParallel(n, t, s, sOld)) break;
                 MakeColumnsDistinct(rng, n, t, s, sOld);

@@ -46,9 +46,10 @@ Complex is arriving one primitive at a time: complex products are native (the
 4M method over the real GEMM, `ComplexKernels`), so are LU and its solves (one
 blocked algorithm written over the element type, `BlockedLu`, behind a single
 `LuDecomposition<T>`), so is the 1-norm estimator and the condition estimate
-built on it (one `NormEstimate` core over the element type), and the complex
-exponentials (`Expm`/`Expmv` on `Matrix<Complex>`) still reach the real code
-through `ComplexEmbedding` until they are rebuilt on those primitives.
+built on it (one `NormEstimate` core over the element type), and so are the
+exponentials: `Expm` and `Expmv` are each one algorithm over the element type,
+run natively for `double` and `Complex`. The real embedding they were first
+computed through is kept, internally, as their oracle.
 
 Storage is a GC-pinned managed array: nothing in the core is `IDisposable`, a
 live view keeps its storage alive, and use-after-free is unexpressible. Views
@@ -85,15 +86,15 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile/MatrixShape.cs` | Self-validating shape value; all extent/offset arithmetic, checked in `long` |
 | `src/Tensile/MatrixView.cs` | `MatrixView<T>` / `ReadOnlyMatrixView<T>`: `Span`-backed ref structs, obtained only by `Bind` or slicing; no pointer constructor |
 | `src/Tensile/ViewOperands.cs` | Repackages a view as a kernel `Operand`/`Target`; the only place the public assembly touches the kernel assembly's types |
-| `src/Tensile/LinearOperators.cs` | `ILinearOperator<T>` / `IAdjointOperator<T>` over views (the public extension points), `DenseMatrixOperator` (A^p, real), `LuInverseOperator<T>`, and the internal `ComplexDenseOperator` (A^p by four real panel products on the split parts) |
+| `src/Tensile/LinearOperators.cs` | `ILinearOperator<T>` / `IAdjointOperator<T>` over views (the public extension points), `DenseMatrixOperator` (A^p, real), `LuInverseOperator<T>`, and the internal `ComplexDenseOperator` (A^p by two real panel products per step, one per real part of A over the stacked [Xr | Xi]) |
 | `src/Tensile/NormEstimate.cs` | Higham–Tisseur `normest1` as safe code over managed arrays, written once over the element type with `double` and `Complex` overloads; `Condition` (dgecon/zgecon-equivalent) |
-| `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
-| `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011); the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
-| `src/Tensile/*.Complex.cs` | The complex public surface (`Expm`, `Expmv`, `Multiply` on `Workspace` and `MatrixOperations`), as partials of the real classes, so an implementation can change behind a signature that does not move |
-| `src/Tensile/ElementKernels.cs` | `IElementKernels<T>`: the static-abstract seam a generic algorithm binds its arithmetic through (products, magnitudes, exact norms), and `DoubleKernels` over the existing real path |
+| `src/Tensile/MatrixExponential.cs` | `Expm`, Al-Mohy & Higham (2009) scaling-and-squaring, written once over `T`; the Padé ladder, the `ell` correction, `ExpmDiagnostics` |
+| `src/Tensile/MatrixExponentialAction.cs` | `Expmv`, Al-Mohy & Higham (2011), written once over `T`; the degree/scaling search, the dense and matrix-free overloads, `ExpmvDiagnostics` |
+| `src/Tensile/*.Complex.cs` | The complex public surface (`Expm`, `Expmv`, `Multiply`, LU, norms and condition on `Workspace` and `MatrixOperations`), as partials of the real classes: typed entry points over the generic cores |
+| `src/Tensile/ElementKernels.cs` | `IElementKernels<T>`: the static-abstract seam a generic algorithm binds the element type through — products, magnitudes, exact norms, pivot measure, conjugate, sign, scaling, `exp`, and the element type's own power operator and in-place LU — and `DoubleKernels` over the existing real path |
 | `src/Tensile/ComplexKernels.cs` | `ComplexKernels`: complex products by 4M over the real GEMM, complex magnitudes and norms |
 | `src/Tensile/ComplexScratch.cs` | The 4M split buffers a `Workspace` retains between products, capped at 2^21 elements; a product over the cap gets its own for that call |
-| `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back, and `EmbeddedOperator` for matrix-free complex operators. Today's complex implementation and, permanently, the complex oracle |
+| `src/Tensile/ComplexEmbedding.cs` | X + iY as the real [[X, -Y], [Y, X]]; embed, stack, project back, `EmbeddedOperator`, and the embedded `Expm`/`Expmv` exactly as they first shipped — the complex path's oracle, for the tests, `tensile-diag` and `ComplexExponentialBenchmarks` |
 | `src/Tensile/TensileLimits.cs` | `TensileLimits.MaxElements` (process-wide ceiling), `AllocationLimitException`, and `Storage` — the one allocation path every request-sized buffer goes through |
 | `src/Tensile/Structures.cs` | `IMatrixStructure`, `ITriangularStructure`, General + the three triangular structures, `StructuredMatrix<T, TStructure>` |
 | `src/Tensile/Workspace.cs` | Kernel choice + packing buffers + complex split buffers, internally locked; `Gate`/`MultiplyHeld` for an operation that must hold the lock across several products |
@@ -106,9 +107,9 @@ through `InternalsVisibleTo`; a consumer of the package cannot.
 | `src/Tensile.Kernels/*.cs` | As before: kernels, packing, Gemm/ParallelGemm/GemmDispatch, ColumnOps, Pivoting, PanelProduct, Triangular, Lu, Norms, Reference |
 | `src/Tensile.Interop.Blis/` | Native `bli_dgemm` binding + dispatch/ABI queries, its own package; `README.md` carries the `TENSILE_BLIS_LIBRARY` warning |
 | `tests/Tensile.Fuzz/` | SharpFuzz harness: an input is a script of operations over hostile integers; the property is I5. Nightly under afl++; `--self-check` replays the seed corpus per PR |
-| `tests/Tensile.Tests/` | xunit.v3, 1610 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
-| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route |
-| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy, expm accuracy against a Taylor oracle, expmv cost against expm by operation count; and the codegen gate's process |
+| `tests/Tensile.Tests/` | xunit.v3, 1636 tests; `Invariants/` is the secure-by-design spec, all green; kernel-generic contracts run per kernel via `IKernelCase` markers |
+| `bench/Tensile.Benchmarks/` | BenchmarkDotNet: GEMM vs BLIS (one class, interleaved — see finding 12), serial vs threaded, kernel ceiling, LU block-size sweep, API overhead (what the security migration cost), thread scaling, serial/threaded crossover, serial cache-blocking sweep with both driver and dispatch arms, 4M complex GEMM against real GEMM and the embedded route, native complex `Expm`/`Expmv` against the embedded route |
+| `tools/Tensile.Diagnostics/` | `tensile-diag`: ISA, BLIS dispatch, LU phase breakdown, estimator accuracy (real and complex), expm accuracy against a Taylor oracle, expmv cost against expm by operation count, native complex exponentials against the embedded route; and the codegen gate's process |
 | `disasm.sh` | Per-kernel disassembly + accumulator-spill check |
 | `docs/api.md` | The API guide |
 
@@ -854,7 +855,8 @@ well- and ill-conditioned inputs.
     there is no shift to lose. It was found only because the cost of the
     embedding was measured rather than argued — the first version's doc
     comment had already described the limitation, and underestimated it by
-    an order of magnitude.
+    an order of magnitude. The native complex `expmv` removes the whole
+    complex shift and needs no such handling; the embedded oracle keeps it.
 
 ---
 
@@ -925,10 +927,10 @@ well- and ill-conditioned inputs.
   overloads for `double` and `Complex` only — over a generic interior, so an
   element type with no arithmetic fails to compile rather than at run time.
 
-- **Complex arrives through a real embedding first, native primitives later,
-  behind a signature that does not move.** `Expm`/`Expmv` on `Matrix<Complex>`
-  are partials of the real classes, so step 5 of the complex plan replaces
-  their bodies and no caller notices. The embedding then stays as the oracle:
+- **Complex arrived through a real embedding first, native primitives later,
+  behind a signature that did not move.** `Expm`/`Expmv` on `Matrix<Complex>`
+  are partials of the real classes, so step 5 of the complex plan replaced
+  their bodies and no caller noticed — which is how it went. The embedding then stays as the oracle:
   an independent route to the same answer, built on real code that is already
   verified — the same way `Expm` became `Expmv`'s oracle. The result is taken
   by projecting onto the embedded form (averaging the paired blocks) rather
@@ -1038,11 +1040,14 @@ well- and ill-conditioned inputs.
   form is pinned to the real one exactly on real inputs, which makes the real
   cross-validation, when it happens, cover most of it.
 - **The complex dense operator is internal.** `EstimateOneNorm` on a complex
-  matrix uses `ComplexDenseOperator`, which snapshots A as split real and
-  imaginary parts; the public `DenseMatrixOperator` is real-only and
-  references its matrix. Whether the public type becomes generic, and whether
-  it should snapshot or reference, is for the native complex exponential to
-  decide — it is that operator's main consumer.
+  matrix and the native complex exponentials use `ComplexDenseOperator`,
+  reached through `IElementKernels<T>.PowerOperator`, which snapshots A as
+  split real and imaginary parts; the public `DenseMatrixOperator` is
+  real-only and references its matrix. The exponentials turned out not to
+  need a public complex operator at all — they reach the element type's own
+  through the kernels — so a public one waits for a caller who wants to hand
+  a dense complex operator to `NormEstimate.Of` directly, and the
+  snapshot-or-reference question with it.
 - **The estimator's `PanelProduct` applications are O(n^2 t) with no
   blocking.** Fine at the sizes that matter for `dgecon`, and now load-bearing
   for `expmv`, whose whole inner loop is this path. It is the right primitive
@@ -1101,6 +1106,21 @@ well- and ill-conditioned inputs.
   optimum. Its trailing updates are 4M products and so inherit the
   split-buffer cap: a trailing block over 2^21 split elements allocates per
   update.
+- **The Padé solve is substitution with n right-hand sides.** `expm`
+  solves q(A) X = p(A) for an n x n X, which is 2n^3 flops of triangular
+  substitution after the LU — and the substitution, real kernel and complex
+  generic alike, is column-by-column, not a GEMM-based blocked TRSM. On the
+  development container it is ~20-25% of an n=256 exponential on either
+  route. A blocked TRSM whose off-diagonal updates go through GEMM would
+  move most of it to the kernel's speed, for real LU solves generally, not
+  only here. Unmeasured on the 12700H.
+- **Complex magnitudes are robust and slow.** `ComplexKernels.Magnitude` is
+  `Complex.Abs`, a scaled hypot, measured several times a real `Math.Abs`
+  per element. It sits in every complex norm, the estimator's column norms
+  and signs, and `expmv`'s termination test. A fast path (plain
+  sqrt(re^2 + im^2) when both parts are in the safe range, hypot otherwise)
+  would keep the robustness; not written, since no measurement yet says a
+  norm is what bounds a real workload.
 - **The triangular structure solves are real-only**, and still say
   `SolveTransposed` where the decomposition now says `SolveAdjoint`. When
   they gain a complex path the rename should follow.
@@ -1230,7 +1250,67 @@ a documented public API, and structure-typed dispatch. What remains:
       estimates. Complex `ReciprocalCondition` (zgecon), `EstimateOneNorm`,
       `OneNorm` and `InfinityNorm` on `Matrix<Complex>` came with it; see
       finding 8 for how it is verified.
-   5. Native `expm`/`expmv`, verified against the embedding.
+   5. ~~Native `expm`/`expmv`, verified against the embedding.~~ *Done.* Both
+      algorithms are written once over the element type — products, norms,
+      the estimator, the Padé LU, `exp` and real scaling all come through
+      `IElementKernels<T>` — and the complex entry points call the same cores
+      as the real ones. The real path's arithmetic is unchanged:
+      `tensile-diag`'s `expm`, `expmv` and estimator reports are identical
+      before and after, every degree, squaring count, application count and
+      error digit. One deliberate behaviour change: the Padé denominator is
+      now factored in place on the caller's workspace, where the real-only
+      code copied it and factored on `Workspace.Shared` whatever it was given.
+
+      The complex trace shift is now removed whole, real and imaginary parts
+      together, so finding 15's special handling is no longer needed outside
+      the oracle; the matrix-free complex overload uses its bound as given,
+      with no sqrt(2). The embedded `Expm`/`Expmv` stay in `ComplexEmbedding`
+      as the oracle, exactly as they shipped.
+
+      Verified against that oracle on every Padé degree and the scaled
+      branch, on every micro-kernel serial and threaded, dense and
+      matrix-free, with a large j*omega*I shift, on a strongly nonnormal
+      matrix, and against the complex Taylor series the existing suite
+      already had; a real matrix exponentiated as complex is real exactly.
+      `tensile-diag` on random complex matrices (n = 16-128, norms 1-300):
+      the answers agree to 2e-14 or better; native `Expm` never took more
+      squarings than embedded and took one fewer in three of six cases; native
+      `Expmv` matched or beat the embedded application count except once —
+      80 against 68 at n=128, where it chose 40x5 over 55x4. That is the
+      parameter search doing its job: it minimises the bound m*s (200 against
+      220), not the applications left after early exits, and the real
+      algorithm makes the same trade.
+
+      **The first native version was no faster than the embedding**, despite
+      half the flops, and three fixes were measured into it. (a) The `ell`
+      test took a complex modulus of every entry on every one of its 2m+1 =
+      27 passes; `Complex.Abs` is a robust hypot, and that was about a fifth
+      of an n=256 exponential. The moduli are now taken once. (b)
+      `ComplexDenseOperator` split A into two pinned-heap matrices on every
+      construction, 64 us at n=64, and the estimator builds one per power;
+      now the ordinary heap, 17 us. Its four panel products are now two, one
+      per real part of A over the stacked panel [Xr | Xi], so each part is
+      streamed once per step. (c) The dense `expmv` search estimated every
+      interior d(p) twice, because it asks for max(d(p), d(p+1)) at each p;
+      each is now estimated once and cached. That one helps the real path
+      too, with bit-identical parameters, since the estimator is
+      deterministic — the diag comparison still reads identical.
+
+      Measured afterwards on the development container
+      (`ComplexExponentialBenchmarks`, BDN short job, single-threaded,
+      within-run ratios only, embedded time over native):
+
+      | n | `Expm` | `Expmv`, one column | bytes allocated, native over embedded |
+      | --- | --- | --- | --- |
+      | 64 | **1.26x** | 0.95x (noise: 8% StdDev) | 0.51 `Expm`, 0.69 `Expmv` |
+      | 256 | **1.49x** | **1.47x** | 0.49 `Expm`, 0.47 `Expmv` |
+
+      Short of the 2x the flops suggest, for measured reasons: at n=256 the
+      Padé solve with n right-hand sides is ~20-25% of either route and costs
+      the same on both (see open items); complex LU's managed panel costs as
+      much as the real kernel LU on twice the order; and a complex modulus is
+      several times a real absolute value wherever a norm is taken.
+      **Not measured on the 12700H.**
    6. Only if profiling asks: splitting inside packing (BLIS's 1M) instead of
       into temporaries, a complex micro-kernel, or split storage.
       `System.Numerics.Complex` is interleaved, which matches `zgemm` layout

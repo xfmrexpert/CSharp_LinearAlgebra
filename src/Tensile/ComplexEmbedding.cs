@@ -18,11 +18,13 @@ namespace Tensile;
 /// are the whole mechanism by which the real <c>expm</c> and <c>expmv</c>
 /// compute complex exponentials here.
 ///
-/// This exists for two reasons, one temporary and one permanent. Until the
-/// library has native complex primitives (complex GEMM, complex LU, a complex
-/// norm estimator) it is how complex exponentials are computed at all. After
-/// that it remains the oracle for the native path: an independent route to the
-/// same answer, built entirely on real code that is already verified.
+/// It was how complex exponentials were first computed, before the library
+/// had native complex products, LU and norm estimation. Now that the
+/// exponentials are native it is their oracle: an independent route to the
+/// same answer, built entirely on real code that is verified on its own --
+/// <see cref="Expm"/> and the two <c>Expmv</c> overloads below are the
+/// embedded computations, kept exactly as they shipped, for the tests, the
+/// diagnostics and the benchmark that compares the two routes.
 ///
 /// What the representation costs, for the record. The embedded matrix holds
 /// four times the input's element count (twice its bytes). A product of two
@@ -167,6 +169,93 @@ internal static class ComplexEmbedding
         }
 
         return scale == 0.0 ? defect : defect / scale;
+    }
+
+    /// <summary>
+    /// exp(A) through the embedding: the real algorithm on [[X, -Y], [Y, X]],
+    /// projected back. The oracle for the native complex <c>Expm</c>; the
+    /// diagnostics report the real computation, whose parameters are the ones
+    /// this result used.
+    /// </summary>
+    public static Matrix<Complex> Expm(Matrix<Complex> a, Workspace? workspace = null, ExpmDiagnostics? diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+
+        if (!a.IsSquare)
+            throw new ArgumentException($"The matrix exponential requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
+
+        if (a.Rows <= 1) return MatrixExponential.Expm(a, workspace, diagnostics);
+
+        return Project(MatrixExponential.Expm(Embed(a), workspace, diagnostics));
+    }
+
+    /// <summary>
+    /// exp(tA)B through the embedding, with the imaginary part of the trace
+    /// shift removed in complex arithmetic first and restored as a rotation
+    /// after -- the real algorithm's own shift can only reach the real part
+    /// (finding 15). The oracle for the native complex dense <c>Expmv</c>.
+    /// </summary>
+    public static Matrix<Complex> Expmv(
+        Matrix<Complex> a, ReadOnlyMatrixView<Complex> b, double t, ExpmvDiagnostics? diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+
+        if (!a.IsSquare)
+            throw new ArgumentException($"The exponential action requires a square matrix, got {a.Rows}x{a.Columns}.", nameof(a));
+
+        if (b.Rows != a.Rows)
+            throw new ArgumentException($"B has {b.Rows} rows, expected the operator's order {a.Rows}.", nameof(b));
+
+        int n = a.Rows;
+        if (n == 0 || b.Columns == 0) return Matrix.From(b);
+
+        Complex trace = Complex.Zero;
+        for (int i = 0; i < n; i++) trace += a[i, i];
+
+        double omega = trace.Imaginary / n;
+        var shifted = Matrix.From(a.ReadOnlyView);
+        if (omega != 0.0)
+            for (int i = 0; i < n; i++) shifted[i, i] += new Complex(0.0, -omega);
+
+        var result = Unstack(MatrixExponentialAction.Expmv(Embed(shifted), Stack(b).ReadOnlyView, t, diagnostics));
+
+        if (omega != 0.0)
+        {
+            Complex rotation = Complex.FromPolarCoordinates(1.0, t * omega);
+            for (int j = 0; j < result.Columns; j++)
+            {
+                Span<Complex> column = result.Column(j);
+                for (int i = 0; i < column.Length; i++) column[i] *= rotation;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// exp(tA)B for a matrix-free complex operator through the embedding, the
+    /// norm bound inflated by sqrt(2) for the real representation. The oracle
+    /// for the native matrix-free complex <c>Expmv</c>.
+    /// </summary>
+    public static Matrix<Complex> Expmv(
+        ILinearOperator<Complex> op,
+        ReadOnlyMatrixView<Complex> b,
+        double t,
+        double oneNormBound,
+        ExpmvDiagnostics? diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+
+        if (op.Order > int.MaxValue / 2)
+            throw new ArgumentOutOfRangeException(nameof(op), op.Order, "The operator's real representation would not fit.");
+
+        if (b.Rows != op.Order)
+            throw new ArgumentException($"B has {b.Rows} rows, expected the operator's order {op.Order}.", nameof(b));
+
+        if (op.Order == 0 || b.Columns == 0) return Matrix.From(b);
+
+        return Unstack(MatrixExponentialAction.Expmv(
+            new EmbeddedOperator(op), Stack(b).ReadOnlyView, t, oneNormBound * Math.Sqrt(2.0), diagnostics));
     }
 }
 

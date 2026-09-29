@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Tensile;
 
 /// <summary>
@@ -29,6 +31,12 @@ namespace Tensile;
 /// which is the point of that interface: an FEM or MTL operator that applies A
 /// without assembling it plugs in here directly, and nothing in this algorithm
 /// ever needs A's entries or its transpose.
+///
+/// Like <see cref="MatrixExponential"/>, the algorithm is written once over the
+/// element type and runs natively for <see cref="double"/> and
+/// <see cref="Complex"/>; only the trace shift differs, and it is computed by
+/// the typed entry points. For double it performs the same operations as the
+/// real-only implementation it replaced.
 /// </summary>
 public static partial class MatrixExponentialAction
 {
@@ -130,15 +138,43 @@ public static partial class MatrixExponentialAction
         double mu = Trace(a) / n;
         var shifted = ShiftDiagonal(a, -mu);
 
-        double oneNorm = shifted.OneNorm();
+        return Dense<double, DoubleKernels>(shifted, b, t, mu, diagnostics);
+    }
+
+    /// <summary>
+    /// The dense algorithm on an already shifted matrix, for any element type:
+    /// the sharp ||A^p||^(1/p) bounds, which need the adjoint, and the dense
+    /// operator.
+    /// </summary>
+    private static Matrix<T> Dense<T, TKernels>(
+        Matrix<T> shifted, ReadOnlyMatrixView<T> b, double t, T mu, ExpmvDiagnostics? diagnostics)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
+    {
+        double oneNorm = TKernels.OneNorm(shifted.ReadOnlyView);
 
         // The sharp bound needs ||A^p||^(1/p), which the estimator reaches
-        // through products with A and A^T -- available here because a dense
-        // matrix is transposable, and the reason the matrix-free overload
+        // through products with A and its adjoint -- available here because a
+        // dense matrix has one, and the reason the matrix-free overload
         // cannot use it.
-        double Alpha(int p) => Math.Max(DPower(shifted, p), DPower(shifted, p + 1));
+        //
+        // Each d(p) is estimated once. The search asks for
+        // max(d(p), d(p+1)) at every p, so without the cache every interior
+        // power was estimated twice -- fourteen estimator runs where eight
+        // do. The estimator is deterministic, so the cached value is the one
+        // a second run would have returned, and the parameters are unchanged.
+        var d = new double[MaxPower + 2];
+        Array.Fill(d, double.NaN);
 
-        return Run(new DenseMatrixOperator(shifted), b, t, mu, oneNorm, Alpha, diagnostics);
+        double D(int p)
+        {
+            if (double.IsNaN(d[p])) d[p] = DPower<T, TKernels>(shifted, p);
+            return d[p];
+        }
+
+        double Alpha(int p) => Math.Max(D(p), D(p + 1));
+
+        return Run<T, TKernels>(TKernels.PowerOperator(shifted, 1), b, t, mu, oneNorm, Alpha, diagnostics);
     }
 
     /// <summary>
@@ -190,21 +226,26 @@ public static partial class MatrixExponentialAction
         if (op.Order == 0 || b.Columns == 0) return Matrix.From(b);
 
         // No trace, so no shift: mu = 0. And no transpose, so no alpha.
-        return Run(op, b, t, mu: 0.0, oneNormBound, alpha: null, diagnostics);
+        return Run<double, DoubleKernels>(op, b, t, mu: 0.0, oneNormBound, alpha: null, diagnostics);
     }
 
     /// <summary>
-    /// The algorithm proper, shared by both overloads: choose the parameters,
-    /// then run the scaled Taylor recurrence.
+    /// The algorithm proper, shared by every overload and both element types:
+    /// choose the parameters, then run the scaled Taylor recurrence.
+    /// <paramref name="mu"/> is the shift already taken out of the operator,
+    /// real or complex, and is folded back one factor exp(t*mu/s) per scaling
+    /// step.
     /// </summary>
-    private static Matrix<double> Run(
-        ILinearOperator<double> op,
-        ReadOnlyMatrixView<double> b,
+    private static Matrix<T> Run<T, TKernels>(
+        ILinearOperator<T> op,
+        ReadOnlyMatrixView<T> b,
         double t,
-        double mu,
+        T mu,
         double oneNorm,
         Func<int, double>? alpha,
         ExpmvDiagnostics? diagnostics)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
     {
         int n = op.Order;
         int columns = b.Columns;
@@ -235,22 +276,25 @@ public static partial class MatrixExponentialAction
 
         var f = Matrix.From(b);
         var work = Matrix.From(b);
-        var next = new Matrix<double>(n, columns);
+        var next = new Matrix<T>(n, columns);
 
-        double eta = Math.Exp(t * mu / s);
+        // exp(t*mu/s), evaluated as (mu*t)/s: for real mu that is exactly the
+        // (t*mu)/s it always was, and for complex mu the division by a real s
+        // is exact per part.
+        T eta = TKernels.Exp(TKernels.Scale(mu, t) / T.CreateTruncating((double)s));
 
         for (int i = 0; i < s; i++)
         {
-            double c1 = work.InfinityNorm();
+            double c1 = TKernels.InfinityNorm(work.ReadOnlyView);
 
             for (int j = 0; j < m; j++)
             {
                 double coefficient = t / (s * (double)(j + 1));
 
                 op.Apply(work.ReadOnlyView, next.View);
-                ScaleInto(next, coefficient, work);
+                ScaleInto<T, TKernels>(next, coefficient, work);
 
-                double c2 = work.InfinityNorm();
+                double c2 = TKernels.InfinityNorm(work.ReadOnlyView);
                 AddInto(f, work);
 
                 if (diagnostics is not null) diagnostics.Applications++;
@@ -259,7 +303,7 @@ public static partial class MatrixExponentialAction
                 // precision, so the degree is a cap rather than a count. This
                 // is where most of the saving against a fixed-degree series
                 // comes from.
-                if (c1 + c2 <= UnitRoundoff * f.InfinityNorm())
+                if (c1 + c2 <= UnitRoundoff * TKernels.InfinityNorm(f.ReadOnlyView))
                 {
                     if (diagnostics is not null) diagnostics.EarlyExits++;
                     break;
@@ -366,8 +410,10 @@ public static partial class MatrixExponentialAction
     }
 
     /// <summary>||A^p||_1^(1/p), estimated rather than formed.</summary>
-    private static double DPower(Matrix<double> a, int p) =>
-        Math.Pow(a.EstimateOneNorm(power: p, columns: Ell), 1.0 / p);
+    private static double DPower<T, TKernels>(Matrix<T> a, int p)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T> =>
+        Math.Pow(NormEstimate.Estimate<T, TKernels>(TKernels.PowerOperator(a, p), Ell).Value, 1.0 / p);
 
     /// <summary>Record the parameters chosen, when a caller asked for them.</summary>
     private static void Report(ExpmvDiagnostics? diagnostics, int degree, int scaling)
@@ -394,40 +440,45 @@ public static partial class MatrixExponentialAction
     }
 
     /// <summary>target := scale * source, both the same shape.</summary>
-    private static void ScaleInto(Matrix<double> source, double scale, Matrix<double> target)
+    private static void ScaleInto<T, TKernels>(Matrix<T> source, double scale, Matrix<T> target)
+        where T : unmanaged, INumberBase<T>
+        where TKernels : struct, IElementKernels<T>
     {
         for (int j = 0; j < source.Columns; j++)
         {
-            ReadOnlySpan<double> from = source.ReadOnlyView.Column(j);
-            Span<double> to = target.Column(j);
-            for (int i = 0; i < from.Length; i++) to[i] = from[i] * scale;
+            ReadOnlySpan<T> from = source.ReadOnlyView.Column(j);
+            Span<T> to = target.Column(j);
+            for (int i = 0; i < from.Length; i++) to[i] = TKernels.Scale(from[i], scale);
         }
     }
 
-    private static void ScaleInPlace(Matrix<double> a, double scale)
+    private static void ScaleInPlace<T>(Matrix<T> a, T scale)
+        where T : unmanaged, INumberBase<T>
     {
-        if (scale == 1.0) return;
+        if (scale == T.One) return;
 
         for (int j = 0; j < a.Columns; j++)
         {
-            Span<double> column = a.Column(j);
+            Span<T> column = a.Column(j);
             for (int i = 0; i < column.Length; i++) column[i] *= scale;
         }
     }
 
     /// <summary>target := target + source.</summary>
-    private static void AddInto(Matrix<double> target, Matrix<double> source)
+    private static void AddInto<T>(Matrix<T> target, Matrix<T> source)
+        where T : unmanaged, INumberBase<T>
     {
         for (int j = 0; j < target.Columns; j++)
         {
-            ReadOnlySpan<double> from = source.ReadOnlyView.Column(j);
-            Span<double> to = target.Column(j);
+            ReadOnlySpan<T> from = source.ReadOnlyView.Column(j);
+            Span<T> to = target.Column(j);
             for (int i = 0; i < to.Length; i++) to[i] += from[i];
         }
     }
 
     /// <summary>target := source.</summary>
-    private static void CopyInto(Matrix<double> source, Matrix<double> target)
+    private static void CopyInto<T>(Matrix<T> source, Matrix<T> target)
+        where T : unmanaged, INumberBase<T>
     {
         for (int j = 0; j < source.Columns; j++)
             source.ReadOnlyView.Column(j).CopyTo(target.Column(j));
